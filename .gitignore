@@ -1,0 +1,16 @@
+# Artefatos de compilacao (o .exe vai como Release, nao no historico)
+build/
+dist/
+*.spec
+icone.ico
+
+# Configuracao e diagnostico da maquina local: contem a CHAVE compartilhada,
+# nomes de PC e IPs da rede. Nunca versionar.
+config.json
+*.log
+servidor-*.txt
+cliente-*.txt
+relatorio*.txt
+
+__pycache__/
+*.py[cod]
