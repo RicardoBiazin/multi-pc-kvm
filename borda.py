@@ -44,7 +44,13 @@ class Controle:
         self.eu = eu
         self.enfileirar = enfileirar
         self.x0, self.y0, self.largura, self.altura = ew.geometria_virtual()
-        self.ancora = (self.x0 + self.largura // 2, self.y0 + self.altura // 2)
+        self.monitores = [m[:4] for m in ew.monitores()]
+        # Centro do monitor PRINCIPAL, nao do retangulo todo: com mais de um
+        # monitor o centro do retangulo pode cair num buraco entre telas, ou
+        # exatamente na divisa entre duas.
+        centro = lay.centro_principal(self.monitores, self.x0, self.y0,
+                                      self.largura, self.altura)
+        self.ancora = (int(centro[0]), int(centro[1]))
         self.atual = eu
         self.conectados: set[str] = set()
         self.ao_trocar = lambda de, para: None  # a interface avisa na tela
@@ -93,7 +99,8 @@ class Controle:
         anterior, self.atual = self.atual, self.eu
         self._liberado_em = time.monotonic()
         x, y = lay.ponto_de_entrada(aresta_de_chegada, rel, self.x0, self.y0,
-                                    self.largura, self.altura, MARGEM)
+                                    self.largura, self.altura, MARGEM,
+                                    self.monitores)
         ew.mover_cursor(int(x), int(y))
         log.info("cursor -> %s (%s)", self.eu, motivo)
         self._anunciar_troca(anterior, self.eu)

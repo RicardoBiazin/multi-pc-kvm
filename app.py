@@ -57,8 +57,17 @@ def main() -> int:
     cfg["capturar"] = not args.sem_captura
     log = logging.getLogger("app")
     x0, y0, largura, altura = ew.geometria_virtual()
-    log.info("2pc_1Kit | este PC: '%s' | desktop virtual %dx%d em (%d,%d)",
-             cfg.get("este_pc"), largura, altura, x0, y0)
+    telas = ew.monitores()
+    log.info("2pc_1Kit | este PC: '%s' | desktop virtual %dx%d em (%d,%d) | "
+             "%d monitor(es): %s", cfg.get("este_pc"), largura, altura, x0, y0,
+             len(telas),
+             ", ".join(f"{w}x{h} em ({x},{y})" + ("*" if p else "")
+                       for x, y, w, h, p in telas))
+    area = sum(w * h for _, _, w, h, _ in telas)
+    if len(telas) > 1 and area < largura * altura:
+        log.info("%.0f%% do retangulo do desktop nao esta' em tela nenhuma; o "
+                 "cursor sera' puxado para a tela mais proxima nesses pedacos",
+                 100 * (1 - area / (largura * altura)))
     log.info("configuracao: %s", conf.caminho_config())
     log.info("log e relatorios: %s", conf.pasta_de_saida())
 

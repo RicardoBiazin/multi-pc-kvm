@@ -43,6 +43,9 @@ class Cliente:
         self.parar = parar or threading.Event()
         self.injetor = ew.Injetor()
         self.x0, self.y0, self.largura, self.altura = ew.geometria_virtual()
+        # Retangulos reais das telas: com mais de um monitor o retangulo que os
+        # envolve tem buracos, e o cursor nao pode parar neles.
+        self.monitores = [m[:4] for m in ew.monitores()]
         self.remoto = False
         self.conectado = False
         # True entre mandar 'sair' e o servidor responder: nao adianta injetar
@@ -90,7 +93,8 @@ class Cliente:
                 conn, _ = protocolo.conectar(
                     *alvo, self.cfg["chave"],
                     {"papel": "cliente", "nome": self.eu,
-                     "tela": [self.largura, self.altura]},
+                     "tela": [self.largura, self.altura],
+                     "monitores": self.monitores},
                 )
             except Exception as exc:
                 self.ultimo_erro = str(exc)
@@ -213,7 +217,7 @@ class Cliente:
             self.aguardando = False
             self.vx, self.vy = lay.ponto_de_entrada(
                 msg["de"], msg["rel"], self.x0, self.y0,
-                self.largura, self.altura, MARGEM)
+                self.largura, self.altura, MARGEM, self.monitores)
             # O cursor entra a poucos px da borda: qualquer tremida na mao o
             # jogaria de volta na hora. So' liberamos a saida por esta aresta
             # depois que ele se afastar dela.
@@ -256,6 +260,10 @@ class Cliente:
                 return
             self.vx = min(self.x0 + self.largura - 1, max(self.x0, self.vx))
             self.vy = min(self.y0 + self.altura - 1, max(self.y0, self.vy))
+            # Buraco entre monitores: o Windows prenderia o cursor na tela mais
+            # proxima, e a nossa posicao virtual ficaria adiantada. Puxamos nos
+            # dois para eles nao divergirem.
+            self.vx, self.vy = lay.ponto_visivel(self.vx, self.vy, self.monitores)
             self._talvez_liberar()
             self.injetor.mover_para(self.vx, self.vy)
         elif tipo == "btn":

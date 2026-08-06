@@ -60,6 +60,22 @@ def _sistema() -> list[str]:
         f"Executavel   : {sys.executable}",
     ]
 
+    linhas += _secao("monitores")
+    telas = [m[:4] for m in entrada_win.monitores()]
+    x0, y0, largura, altura = entrada_win.geometria_virtual()
+    linhas.append(f"  Retangulo do desktop: {largura}x{altura} em ({x0},{y0})")
+    for x, y, w, h, principal in entrada_win.monitores():
+        linhas.append(f"    {w}x{h} em ({x},{y})"
+                      + ("   <- principal" if principal else ""))
+    area_das_telas = sum(w * h for _, _, w, h in telas)
+    if len(telas) > 1 and area_das_telas < largura * altura:
+        vazio = 100 * (1 - area_das_telas / (largura * altura))
+        linhas.append(f"  {vazio:.0f}% do retangulo NAO esta' em tela nenhuma "
+                      f"(monitores desalinhados ou de tamanhos diferentes).")
+        linhas.append("  O cursor e' puxado para a tela mais proxima nesses "
+                      "pedacos; a travessia de borda so' vale nas beiradas do "
+                      "retangulo.")
+
     linhas += _secao("teclado e mouse")
     conflitos = diagnostico.programas_conflitantes()
     if conflitos:

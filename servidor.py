@@ -173,7 +173,10 @@ class Servidor:
         if antiga is not None:
             antiga.fechar()  # reconexao: derruba a sessao velha
         self.controle.conectados.add(nome)
-        log.info("'%s' conectado de %s (tela %s)", nome, endereco[0], ola.get("tela"))
+        telas = ola.get("monitores") or []
+        log.info("'%s' conectado de %s (tela %s, %d monitor(es)%s)", nome,
+                 endereco[0], ola.get("tela"), len(telas) or 1,
+                 "".join(f" [{m[2]}x{m[3]} em {m[0]},{m[1]}]" for m in telas))
         self.ao_mudar()
 
         try:

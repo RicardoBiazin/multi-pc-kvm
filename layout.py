@@ -123,6 +123,54 @@ class Layout:
         return min(candidatos, key=lambda p: abs(p.linha - origem.linha))
 
 
+# -- geometria com varios monitores -----------------------------------------
+#
+# Um PC continua ocupando uma celula no mapa, mas a tela dele pode ser vazada:
+# com dois monitores de alturas diferentes ou desalinhados, o retangulo que os
+# envolve tem pedacos que nao existem em tela nenhuma ("buracos"). O Windows nao
+# deixa o cursor entrar neles; se calcularmos uma posicao ali, a posicao virtual
+# que guardamos passa a divergir do cursor de verdade e tudo sai de lugar.
+#
+# `monitores` e' sempre uma lista de (x, y, largura, altura).
+
+
+def dentro_de_algum(x: float, y: float, monitores: list) -> bool:
+    return any(mx <= x <= mx + mw - 1 and my <= y <= my + mh - 1
+               for mx, my, mw, mh in monitores)
+
+
+def _preso_no_monitor(x: float, y: float, monitor) -> tuple[float, float, float]:
+    """(x, y, distancia ao quadrado) do ponto do monitor mais proximo de (x, y)."""
+    mx, my, mw, mh = monitor
+    px = min(mx + mw - 1, max(mx, x))
+    py = min(my + mh - 1, max(my, y))
+    return px, py, (px - x) ** 2 + (py - y) ** 2
+
+
+def ponto_visivel(x: float, y: float, monitores: list) -> tuple[float, float]:
+    """O ponto mais proximo de (x, y) que esta' em algum monitor.
+
+    Devolve (x, y) sem mexer se ja' estiver numa tela. Serve para nao deixar o
+    cursor virtual cair num buraco entre monitores.
+    """
+    if not monitores or dentro_de_algum(x, y, monitores):
+        return x, y
+    melhor = min((_preso_no_monitor(x, y, m) for m in monitores),
+                 key=lambda r: r[2])
+    return melhor[0], melhor[1]
+
+
+def centro_principal(monitores: list, x0: int, y0: int, largura: int,
+                     altura: int) -> tuple[float, float]:
+    """Centro do monitor principal -- e' onde o cursor aparece num pulo por
+    atalho. O centro do retangulo todo poderia cair num buraco, ou no meio da
+    divisa entre dois monitores."""
+    if monitores:
+        mx, my, mw, mh = monitores[0]  # `entrada_win.monitores()` poe o principal primeiro
+        return mx + mw / 2, my + mh / 2
+    return x0 + largura / 2, y0 + altura / 2
+
+
 # -- geometria de entrada/saida ---------------------------------------------
 
 
@@ -152,19 +200,28 @@ def relativo_na_aresta(x: float, y: float, aresta: str, x0: int, y0: int,
 
 
 def ponto_de_entrada(aresta: str, rel: float, x0: int, y0: int, largura: int,
-                     altura: int, margem: int = 4) -> tuple[float, float]:
+                     altura: int, margem: int = 4,
+                     monitores: list | None = None) -> tuple[float, float]:
     """Onde o cursor reaparece ao chegar por `aresta`, `margem` px para dentro.
 
     `aresta` pode ser "centro": e' o caso do atalho de teclado, que pula direto
     para um PC sem vir de borda nenhuma.
+
+    Com `monitores`, o resultado e' puxado para a tela mais proxima quando cair
+    num buraco entre monitores -- senao o Windows prenderia o cursor em outro
+    lugar e a posicao virtual ficaria errada desde a chegada.
     """
     rel = min(1.0, max(0.0, rel))
     if aresta == "centro":
-        return x0 + largura / 2, y0 + altura / 2
-    if aresta == "esquerda":
-        return x0 + margem, y0 + rel * (altura - 1)
-    if aresta == "direita":
-        return x0 + largura - 1 - margem, y0 + rel * (altura - 1)
-    if aresta == "cima":
-        return x0 + rel * (largura - 1), y0 + margem
-    return x0 + rel * (largura - 1), y0 + altura - 1 - margem
+        ponto = centro_principal(monitores or [], x0, y0, largura, altura)
+    elif aresta == "esquerda":
+        ponto = (x0 + margem, y0 + rel * (altura - 1))
+    elif aresta == "direita":
+        ponto = (x0 + largura - 1 - margem, y0 + rel * (altura - 1))
+    elif aresta == "cima":
+        ponto = (x0 + rel * (largura - 1), y0 + margem)
+    else:
+        ponto = (x0 + rel * (largura - 1), y0 + altura - 1 - margem)
+    if monitores:
+        return ponto_visivel(*ponto, monitores)
+    return ponto

@@ -242,6 +242,54 @@ def geometria_virtual() -> tuple[int, int, int, int]:
     )
 
 
+MONITORINFOF_PRIMARY = 0x01
+MONITORENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR,
+                                     wintypes.HDC,
+                                     ctypes.POINTER(wintypes.RECT),
+                                     wintypes.LPARAM)
+
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+
+user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p,
+                                       MONITORENUMPROC, wintypes.LPARAM]
+user32.EnumDisplayMonitors.restype = wintypes.BOOL
+user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+user32.GetMonitorInfoW.restype = wintypes.BOOL
+
+
+def monitores() -> list[tuple[int, int, int, int, bool]]:
+    """[(x, y, largura, altura, e_o_principal)] de cada monitor.
+
+    O retangulo do desktop virtual nao basta quando ha' mais de um monitor: com
+    telas de alturas diferentes ou desalinhadas, partes desse retangulo nao
+    existem em tela nenhuma. O Windows prende o cursor fora delas, e sem saber
+    onde elas ficam a posicao que calculamos descola da real.
+    """
+    achados: list[tuple[int, int, int, int, bool]] = []
+
+    def visitar(monitor, _hdc, _rect, _dados):
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            r = info.rcMonitor
+            achados.append((r.left, r.top, r.right - r.left, r.bottom - r.top,
+                            bool(info.dwFlags & MONITORINFOF_PRIMARY)))
+        return True
+
+    if not user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(visitar), 0):
+        log.warning("EnumDisplayMonitors falhou; usando o desktop virtual inteiro")
+    if not achados:
+        x0, y0, largura, altura = geometria_virtual()
+        achados.append((x0, y0, largura, altura, True))
+    # Principal primeiro, depois da esquerda para a direita.
+    achados.sort(key=lambda m: (not m[4], m[0], m[1]))
+    return achados
+
+
 def posicao_cursor() -> tuple[int, int]:
     ponto = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(ponto))

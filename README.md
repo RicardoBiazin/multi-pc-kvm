@@ -50,6 +50,41 @@ Na coluna *Chave* do painel de rede: **confere** quer dizer que aquele PC está
 com a mesma chave que você; **outra** avisa antes de tentar conectar e falhar.
 A chave em si não trafega no anúncio — só os 8 primeiros dígitos do hash dela.
 
+## PC com mais de um monitor
+
+Cada PC ocupa **uma** célula no mapa, mesmo tendo vários monitores: a travessia
+acontece nas beiradas do conjunto todo, não entre os monitores de um mesmo PC —
+entre eles o cursor passa normalmente, como já faz no Windows.
+
+O cuidado que isso exige: com monitores de tamanhos diferentes ou desalinhados,
+o retângulo que envolve todas as telas tem **pedaços que não existem em tela
+nenhuma**. Exemplo, uma tela 1920×1080 em (0,0) e outra 1280×1024 em (1920,300):
+
+```
+ 0                1920           3200
+ ┌──────────────────┬──────────────┐  0
+ │                  │ ▓▓▓▓ buraco  │
+ │       tela A     ├──────────────┤  300
+ │    1920x1080     │    tela B    │
+ ├──────────────────┤  1280x1024   │  1080
+ │ ▓▓▓ buraco ▓▓▓▓▓ │              │
+ └──────────────────┴──────────────┘  1324
+```
+
+O Windows não deixa o cursor entrar nesses pedaços. Se o programa calculasse uma
+posição ali, o cursor real seria preso em outro lugar e a posição que ele guarda
+passaria a **divergir da real** — o ponteiro apareceria deslocado e as bordas
+disparariam na hora errada. Então toda posição calculada é puxada para a tela
+mais próxima antes de ser usada, na chegada e a cada movimento.
+
+O pulo por `Ctrl+Alt+N` cai no **centro do monitor principal**, não no centro do
+retângulo — que pode ser um buraco, ou a divisa exata entre duas telas.
+
+O relatório lista os monitores e avisa quanto do retângulo está vazio. Uma
+consequência a saber: empurrando o cursor para o lado onde há um buraco, ele
+para na beirada da tela atual em vez de atravessar para o outro PC — a travessia
+vale nas beiradas do retângulo. Mova até a borda real da tela.
+
 ## Máquina com Wi-Fi e cabo
 
 Se o PC tem mais de uma placa, o campo **IP** vira uma lista com todas, dizendo
@@ -205,7 +240,8 @@ condições.
   Entre VLANs ou por VPN, adicione os PCs à mão pelo IP.
 - Sem transferência de arquivos — só texto e imagem no clipboard.
 - Imagens acima de 8 MB (já em PNG) são descartadas.
-- Em modo remoto o cursor do servidor fica parado e visível no meio da tela.
+- Em modo remoto o cursor do servidor fica parado e visível no meio do monitor
+  principal.
 - Eventos de mouse *injetados* por outros programas não atravessam a borda
   (o hook os descarta, junto com os nossos próprios).
 

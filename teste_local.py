@@ -231,6 +231,7 @@ def teste_quique() -> None:
 
     cli = cliente.Cliente.__new__(cliente.Cliente)
     cli.x0, cli.y0, cli.largura, cli.altura = 0, 0, 2560, 1080
+    cli.monitores = [(0, 0, 2560, 1080)]
     cli.injetor = type("I", (), {
         "mover_para": lambda s, x, y: injetado.append((x, y)),
         "soltar_modificadores": lambda s: None})()
@@ -394,6 +395,93 @@ def teste_layout_do_servidor() -> None:
            f"({x},{y})")
 
 
+def teste_multi_monitor() -> None:
+    """Buracos entre monitores: a posicao virtual nao pode parar neles.
+
+    Arranjo usado: uma tela 1920x1080 em (0,0) e outra 1280x1024 em (1920,300),
+    mais baixa e deslocada para baixo. O retangulo que envolve as duas vai de
+    (0,0) a (3200,1324) e tem dois buracos: acima da segunda tela e abaixo da
+    primeira.
+    """
+    print("varios monitores por PC")
+    A = (0, 0, 1920, 1080)
+    B = (1920, 300, 1280, 1024)
+    telas = [A, B]
+    x0, y0, largura, altura = 0, 0, 3200, 1324
+
+    checar("ponto na tela A e' visivel", lay.dentro_de_algum(500, 500, telas))
+    checar("ponto na tela B e' visivel", lay.dentro_de_algum(2500, 800, telas))
+    checar("buraco acima de B nao e' visivel",
+           not lay.dentro_de_algum(2500, 100, telas))
+    checar("buraco abaixo de A nao e' visivel",
+           not lay.dentro_de_algum(500, 1200, telas))
+
+    checar("ponto ja' visivel nao e' mexido",
+           lay.ponto_visivel(500, 500, telas) == (500, 500))
+    px, py = lay.ponto_visivel(2500, 100, telas)
+    checar("buraco acima de B cai na borda de cima de B", (px, py) == (2500, 300),
+           f"({px},{py})")
+    px, py = lay.ponto_visivel(500, 1200, telas)
+    checar("buraco abaixo de A cai na borda de baixo de A",
+           (px, py) == (500, 1079), f"({px},{py})")
+    px, py = lay.ponto_visivel(3199, 50, telas)
+    checar("canto superior direito do retangulo cai no ponto real mais proximo",
+           lay.dentro_de_algum(px, py, telas), f"({px},{py})")
+
+    # entrada por borda que cairia num buraco
+    px, py = lay.ponto_de_entrada("direita", 0.0, x0, y0, largura, altura, 4, telas)
+    checar("entrada pela direita no topo e' puxada para dentro de B",
+           lay.dentro_de_algum(px, py, telas), f"({px},{py})")
+    px, py = lay.ponto_de_entrada("baixo", 0.0, x0, y0, largura, altura, 4, telas)
+    checar("entrada por baixo na esquerda e' puxada para dentro de A",
+           lay.dentro_de_algum(px, py, telas), f"({px},{py})")
+    for aresta in ("esquerda", "direita", "cima", "baixo"):
+        for rel in (0.0, 0.25, 0.5, 0.75, 1.0):
+            px, py = lay.ponto_de_entrada(aresta, rel, x0, y0, largura, altura,
+                                          4, telas)
+            if not lay.dentro_de_algum(px, py, telas):
+                checar(f"entrada {aresta}/{rel} cai em tela", False, f"({px},{py})")
+                break
+        else:
+            continue
+        break
+    else:
+        checar("toda entrada, em qualquer aresta e altura, cai em tela", True)
+
+    # Centro do atalho: monitor principal, e nao o centro do retangulo. Dois
+    # arranjos mostram por que o centro do retangulo e' um lugar ruim.
+    cx, cy = lay.centro_principal(telas, x0, y0, largura, altura)
+    checar("centro do atalho fica no monitor principal", (cx, cy) == (960.0, 540.0),
+           f"({cx},{cy})")
+    checar("e esta' em tela", lay.dentro_de_algum(cx, cy, telas))
+
+    # (a) duas telas iguais lado a lado: o centro do retangulo cai exatamente na
+    #     divisa, onde um movimento minimo troca de monitor
+    lado_a_lado = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)]
+    checar("centro do retangulo cai na divisa entre as duas telas",
+           3840 / 2 == lado_a_lado[1][0])
+    checar("centro do atalho fica no meio do principal, longe da divisa",
+           lay.centro_principal(lado_a_lado, 0, 0, 3840, 1080) == (960.0, 540.0))
+
+    # (b) telas em diagonal: o centro do retangulo nao existe em tela nenhuma
+    diagonal = [(0, 0, 1000, 1000), (2000, 2000, 1000, 1000)]
+    checar("centro do retangulo cai num buraco",
+           not lay.dentro_de_algum(1500, 1500, diagonal))
+    ccx, ccy = lay.centro_principal(diagonal, 0, 0, 3000, 3000)
+    checar("centro do atalho continua em tela", lay.dentro_de_algum(ccx, ccy, diagonal),
+           f"({ccx},{ccy})")
+
+    # um monitor so': nada muda
+    unico = [(0, 0, 2560, 1080)]
+    checar("com um monitor, ponto_visivel nao mexe em nada",
+           lay.ponto_visivel(1234, 567, unico) == (1234, 567))
+    checar("com um monitor, o centro e' o centro da tela",
+           lay.centro_principal(unico, 0, 0, 2560, 1080) == (1280.0, 540.0))
+    checar("sem lista de monitores, ponto_de_entrada segue como antes",
+           lay.ponto_de_entrada("esquerda", 0.5, 0, 0, 1000, 500)
+           == lay.ponto_de_entrada("esquerda", 0.5, 0, 0, 1000, 500, 4, None))
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -407,6 +495,7 @@ def main() -> int:
     teste_movimento_bruto()
     teste_atalho_e_troca()
     teste_layout_do_servidor()
+    teste_multi_monitor()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")
