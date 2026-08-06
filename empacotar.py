@@ -16,6 +16,31 @@ import sys
 
 RAIZ = pathlib.Path(__file__).resolve().parent
 ICONE = RAIZ / "icone.ico"
+VERSAO_TXT = RAIZ / "versao.txt"
+
+
+def gerar_versao() -> pathlib.Path:
+    """Recurso de versao do Windows: alimenta as Propriedades do .exe."""
+    import configuracao as conf
+    partes = conf.VERSAO.split(".")
+    numero = ", ".join((partes + ["0", "0", "0"])[:4])
+    VERSAO_TXT.write_text(f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers=({numero}), prodvers=({numero})),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('CompanyName', {conf.AUTOR!r}),
+      StringStruct('FileDescription',
+                   'Um teclado e um mouse para varios PCs na mesma rede'),
+      StringStruct('FileVersion', {conf.VERSAO!r}),
+      StringStruct('ProductName', {conf.APP!r}),
+      StringStruct('ProductVersion', {conf.VERSAO!r}),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 {conf.AUTOR} -- MIT'),
+    ])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+  ],
+)
+""", encoding="utf-8")
+    return VERSAO_TXT
 
 
 def gerar_icone() -> pathlib.Path:
@@ -68,6 +93,7 @@ def main() -> int:
         return 1
 
     gerar_icone()
+    gerar_versao()
     saida = destino()
     shutil.rmtree(RAIZ / "build", ignore_errors=True)
     shutil.rmtree(saida, ignore_errors=True)
@@ -81,6 +107,7 @@ def main() -> int:
                                   # bloqueia input sobre janelas elevadas
         "--name", "2pc_1Kit",
         "--icon", str(ICONE),
+        "--version-file", str(VERSAO_TXT),
         "--distpath", str(saida),
         "--hidden-import", "pystray._win32",
         "--exclude-module", "pytest",

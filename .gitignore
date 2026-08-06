@@ -3,6 +3,7 @@ build/
 dist/
 *.spec
 icone.ico
+versao.txt
 
 # Configuracao e diagnostico da maquina local: contem a CHAVE compartilhada,
 # nomes de PC e IPs da rede. Nunca versionar.

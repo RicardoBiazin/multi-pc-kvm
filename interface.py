@@ -32,6 +32,7 @@ COR_PC = "#4a7fd4"
 COR_PC_SERVIDOR = "#2f6b3f"
 COR_PC_EU = "#c9752b"
 COR_TEXTO = "#ffffff"
+COR_RODAPE = "#8b9099"
 
 
 class ManipuladorDeLog(logging.Handler):
@@ -64,7 +65,8 @@ class Janela(tk.Tk):
         self._achados: dict[str, dict] = {}
         self._aviso_ate = 0.0
 
-        self.title("2pc_1Kit -- um teclado e um mouse para varios PCs")
+        self.title(f"{conf.APP} v{conf.VERSAO} -- um teclado e um mouse para "
+                   f"varios PCs")
         self.configure(bg=COR_FUNDO)
         self.resizable(False, False)
         self._montar()
@@ -250,6 +252,7 @@ class Janela(tk.Tk):
         barra = ttk.Scrollbar(quadro_log, command=self.texto_log.yview)
         barra.grid(row=0, column=1, sticky="ns", pady=6)
         self.texto_log.configure(yscrollcommand=barra.set)
+        self._montar_rodape()
         # Um Text desabilitado deixa selecionar, mas o Ctrl+C nao chega ate' ele.
         self.texto_log.bind("<Control-c>", self._copiar_selecao)
         self.texto_log.bind("<Control-C>", self._copiar_selecao)
@@ -267,6 +270,34 @@ class Janela(tk.Tk):
                    command=self._abrir_pasta).grid(row=0, column=2)
         ttk.Button(acoes_log, text="Limpar",
                    command=self._limpar_registro).grid(row=0, column=3, padx=6)
+
+    def _montar_rodape(self) -> None:
+        """Versao e autoria, no mesmo formato dos outros projetos."""
+        rodape = tk.Frame(self, bg=COR_FUNDO)
+        rodape.grid(row=7, column=0, columnspan=2, sticky="ew", padx=14,
+                    pady=(0, 8))
+        rodape.columnconfigure(0, weight=1)
+
+        tk.Label(rodape, text=f"{conf.APP} v{conf.VERSAO}", bg=COR_FUNDO,
+                 fg=COR_RODAPE, font=("Segoe UI", 8), anchor="w").grid(
+            row=0, column=0, sticky="w")
+
+        credito = tk.Label(rodape, text=f"Desenvolvido por {conf.AUTOR}",
+                           bg=COR_FUNDO, fg=COR_RODAPE, font=("Segoe UI", 8),
+                           cursor="hand2")
+        credito.grid(row=0, column=1, sticky="e")
+        credito.bind("<Button-1>", lambda _e: self._abrir_linkedin())
+        credito.bind("<Enter>",
+                     lambda _e: credito.configure(font=("Segoe UI", 8, "underline")))
+        credito.bind("<Leave>",
+                     lambda _e: credito.configure(font=("Segoe UI", 8)))
+
+    def _abrir_linkedin(self) -> None:
+        import webbrowser
+        try:
+            webbrowser.open(conf.LINKEDIN)
+        except Exception:
+            self._avisar(conf.LINKEDIN, 20)  # sem navegador: mostra o endereco
 
     # -- config <-> tela ----------------------------------------------------
 

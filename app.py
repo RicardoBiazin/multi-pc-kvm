@@ -58,9 +58,9 @@ def main() -> int:
     log = logging.getLogger("app")
     x0, y0, largura, altura = ew.geometria_virtual()
     telas = ew.monitores()
-    log.info("2pc_1Kit | este PC: '%s' | desktop virtual %dx%d em (%d,%d) | "
-             "%d monitor(es): %s", cfg.get("este_pc"), largura, altura, x0, y0,
-             len(telas),
+    log.info("%s v%s (por %s) | este PC: '%s' | desktop virtual %dx%d em "
+             "(%d,%d) | %d monitor(es): %s", conf.APP, conf.VERSAO, conf.AUTOR,
+             cfg.get("este_pc"), largura, altura, x0, y0, len(telas),
              ", ".join(f"{w}x{h} em ({x},{y})" + ("*" if p else "")
                        for x, y, w, h, p in telas))
     area = sum(w * h for _, _, w, h, _ in telas)

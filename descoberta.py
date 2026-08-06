@@ -155,6 +155,7 @@ class Farol(threading.Thread):
                 "papel": str(msg.get("papel", "")),
                 "chave": str(msg.get("chave", "")),
                 "ips": [str(i) for i in (msg.get("ips") or [])],
+                "versao": str(msg.get("versao", "?")),
                 "visto_em": time.monotonic(),
             }
 
@@ -170,8 +171,10 @@ def descritor(cfg: dict):
         eu = cfg.get("este_pc", "")
         sou_servidor = any(p.get("nome") == eu and p.get("servidor")
                            for p in cfg.get("pcs", []))
+        import configuracao as conf
         return {
             "nome": eu,
+            "versao": conf.VERSAO,
             "ips": [p.ip for p in redes.listar()],
             "porta": int(cfg.get("porta", 24810)),
             "papel": "servidor" if sou_servidor else "cliente",

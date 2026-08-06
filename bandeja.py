@@ -33,7 +33,8 @@ def criar(ao_abrir, ao_sair, motor):
         log.info("pystray nao instalado; bandeja indisponivel")
         return None
 
-    icone = pystray.Icon("2pc_1Kit", _imagem(CINZA), "2pc_1Kit")
+    import configuracao as conf
+    icone = pystray.Icon(conf.APP, _imagem(CINZA), f"{conf.APP} v{conf.VERSAO}")
     icone.menu = pystray.Menu(
         pystray.MenuItem("Abrir", lambda: ao_abrir(), default=True),
         pystray.MenuItem(lambda _i: motor.resumo(), None, enabled=False),
@@ -49,7 +50,7 @@ def criar(ao_abrir, ao_sair, motor):
             if ativo != anterior:
                 anterior = ativo
                 icone.icon = _imagem(VERDE if ativo else CINZA)
-            icone.title = f"2pc_1Kit -- {motor.resumo()}"
+            icone.title = f"{conf.APP} v{conf.VERSAO} -- {motor.resumo()}"
 
     threading.Thread(target=icone.run, name="bandeja", daemon=True).start()
     threading.Thread(target=atualizar, name="bandeja-estado", daemon=True).start()

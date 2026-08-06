@@ -16,6 +16,11 @@ import socket
 import sys
 
 APP = "2pc_1Kit"
+# Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
+VERSAO = "1.1"
+AUTOR = "Ricardo Biazin"
+LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
+
 PORTA_PADRAO = 24810
 CHAVE_REGISTRO = r"Software\Microsoft\Windows\CurrentVersion\Run"
 

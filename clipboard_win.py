@@ -137,17 +137,28 @@ def _ler_uma_vez() -> dict | None:
     return {"t": "clip", "fmt": "imagem", "dados": base64.b64encode(png).decode()}
 
 
-def escrever(msg: dict) -> None:
-    """Aplica no clipboard local uma mensagem `clip` vinda da rede."""
+def escrever(msg: dict, tentativas: int = 3) -> None:
+    """Aplica no clipboard local uma mensagem `clip` vinda da rede.
+
+    Como na leitura, outro processo pode mexer no clipboard no meio da escrita
+    (`SetClipboardData` devolve 'identificador invalido'). E' transitorio.
+    """
     if msg["fmt"] == "texto":
         formato, dados = win32con.CF_UNICODETEXT, msg["dados"]
     else:
         formato = win32con.CF_DIB
         dados = _png_para_dib(base64.b64decode(msg["dados"]))
 
-    with _Aberto():
-        wcb.EmptyClipboard()
-        wcb.SetClipboardData(formato, dados)
+    for n in range(tentativas):
+        try:
+            with _Aberto():
+                wcb.EmptyClipboard()
+                wcb.SetClipboardData(formato, dados)
+            return
+        except (OSError, pywintypes.error):
+            if n == tentativas - 1:
+                raise
+            time.sleep(0.05)
 
 
 def impressao(msg: dict) -> str:

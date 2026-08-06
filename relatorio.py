@@ -36,7 +36,8 @@ def _cabecalho() -> list[str]:
     agora = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     return [
         "=" * 78,
-        "2pc_1Kit -- relatorio de diagnostico",
+        f"{conf.APP} v{conf.VERSAO} -- relatorio de diagnostico",
+        f"desenvolvido por {conf.AUTOR}",
         f"gerado em {agora}",
         "=" * 78,
         "",
@@ -164,9 +165,11 @@ def _achados(farol) -> list[str]:
         linhas.append("  NENHUM. Se o outro PC esta' aberto, verifique: mesma")
         linhas.append("  sub-rede, rede marcada como Particular, e Firewall liberado.")
     for d in lista:
+        versao = d.get("versao", "?")
+        alerta = "  <- versao diferente da deste PC" if versao != conf.VERSAO else ""
         linhas.append(f"  {d['nome']:<20} {d['ip']:<16} {d['papel']:<9} "
-                      f"chave {d['chave']}  outros IPs: "
-                      f"{', '.join(d.get('ips', [])) or '-'}")
+                      f"v{versao:<6} chave {d['chave']}  outros IPs: "
+                      f"{', '.join(d.get('ips', [])) or '-'}{alerta}")
     return linhas
 
 
