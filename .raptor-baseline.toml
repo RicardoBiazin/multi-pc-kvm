@@ -1,0 +1,17 @@
+# Riscos aceitos, com motivo e prazo. Lido por `raptor-win --baseline`.
+# Ver github.com/RicardoBiazin/raptor-win
+
+[[aceito]]
+regra  = "avoid-bind-to-all-interfaces"
+# descoberta.py: o farol UDP PRECISA ouvir em todas as placas.
+motivo = """
+O farol de descoberta escuta broadcast em 0.0.0.0 de proposito. Restringir a uma
+placa quebraria o recurso: a busca transmite por TODAS as placas ativas para que
+o outro PC apareca esteja ele no cabo ou no Wi-Fi, que costumam estar em
+sub-redes diferentes. Nao ha dado sensivel no anuncio - so' nome, IP e os 8
+primeiros digitos do hash da chave (a chave em si nao trafega).
+
+O servidor TCP, que e' quem recebe teclas e cliques, ja' escuta apenas no IP
+configurado (servidor.py, _endereco_de_escuta).
+"""
+ate    = 2027-08-01

@@ -77,6 +77,40 @@ class Servidor:
 
     # -- ciclo de vida ------------------------------------------------------
 
+    def _endereco_de_escuta(self) -> str:
+        """IP em que o servidor abre a porta.
+
+        Escutar em 0.0.0.0 aceita conexao de QUALQUER rede da maquina, inclusive
+        o Wi-Fi de um cafe'. Como este programa injeta teclas e cliques no PC, a
+        porta merece ficar restrita a' placa que a configuracao ja' escolheu -- o
+        handshake HMAC impede o uso sem a chave, e isto reduz quem consegue
+        sequer tentar.
+
+        O IP vem da propria entrada deste PC no layout, a mesma que os clientes
+        usam para conectar. Se ele nao existe mais aqui (DHCP mudou, cabo saiu),
+        volta para 0.0.0.0 com AVISO no log: nao escutar seria pior, e a
+        protecao nao pode desaparecer em silencio.
+        """
+        entrada = next((p for p in self.cfg.get("pcs", [])
+                        if p.get("nome") == self.eu), None)
+        ip = (entrada or {}).get("ip", "").strip()
+        if not ip:
+            log.warning("este PC nao tem IP no layout - escutando em todas as "
+                        "placas (0.0.0.0)")
+            return "0.0.0.0"
+        try:
+            import redes
+            if redes.placa_de(ip) is None:
+                log.warning("o IP configurado (%s) nao existe nesta maquina - "
+                            "escutando em todas as placas (0.0.0.0). Corrija o "
+                            "IP na janela para restringir a porta.", ip)
+                return "0.0.0.0"
+        except Exception as e:                      # pragma: sem cobertura
+            log.warning("nao foi possivel conferir as placas (%s) - escutando "
+                        "em todas (0.0.0.0)", e)
+            return "0.0.0.0"
+        return ip
+
     def executar(self) -> None:
         if self.cfg.get("capturar", True):
             self.captura.start()
@@ -85,13 +119,14 @@ class Servidor:
             log.warning("--sem-captura: so' a area de transferencia sera' "
                         "sincronizada")
 
+        endereco_escuta = self._endereco_de_escuta()
         ouvinte = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         ouvinte.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        ouvinte.bind(("0.0.0.0", self.cfg["porta"]))
+        ouvinte.bind((endereco_escuta, self.cfg["porta"]))
         ouvinte.listen(8)
         ouvinte.settimeout(0.5)
-        log.info("servidor '%s' ouvindo na porta %d | panico: Ctrl+Alt+Shift+Esc",
-                 self.eu, self.cfg["porta"])
+        log.info("servidor '%s' ouvindo em %s:%d | panico: Ctrl+Alt+Shift+Esc",
+                 self.eu, endereco_escuta, self.cfg["porta"])
 
         threading.Thread(target=self._enviar, name="rede-tx", daemon=True).start()
         threading.Thread(target=self._pingar, name="ping", daemon=True).start()
