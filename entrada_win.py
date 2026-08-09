@@ -78,6 +78,18 @@ BOTOES = {
     "x2": (0x0080, 0x0100, 2),
 }
 
+# O Shift DIREITO e' a excecao a regra "repasse o flag de estendida do hook".
+# O hook de baixo nivel entrega o Shift direito com LLKHF_EXTENDED ligado, mas
+# `E0 36` nao e' o Shift direito: e' o "fake shift" que o Windows fabrica em
+# volta das teclas do teclado numerico, e nao corresponde a tecla nenhuma. Se o
+# flag for repassado para o SendInput, o outro PC recebe um evento que o Windows
+# descarta em silencio -- o Shift direito simplesmente nao funciona la', e o
+# esquerdo funciona, porque o scancode dele (0x2A) chega sem o flag.
+#
+# O Shift direito de verdade e' o scancode 0x36 SEM prefixo. Ctrl e Alt direitos
+# nao entram aqui: `E0 1D` e `E0 38` sao mesmo as teclas da direita.
+SCAN_SHIFT_DIREITO = 0x36
+
 # Modificadores a soltar ao trocar de maquina, senao ficam presos: (vk, scancode,
 # estendida). Os VKs sao os laterais (0xA0..0xA5) porque VK_SHIFT generico nao
 # distingue esquerda de direita, e a direita ficaria presa.
@@ -372,7 +384,10 @@ class Injetor:
         entrada = INPUT(type=INPUT_KEYBOARD)
         if scan:
             flags = KEYEVENTF_SCANCODE
-            if estendida:
+            # `and scan != SCAN_SHIFT_DIREITO`: ver a nota do scancode 0x36.
+            # A correcao fica aqui, e nao na captura, porque protege tambem os
+            # eventos que vierem de um PC ainda na versao antiga.
+            if estendida and scan != SCAN_SHIFT_DIREITO:
                 flags |= KEYEVENTF_EXTENDEDKEY
         else:  # sem scancode utilizavel, cai para virtual-key
             flags = 0
