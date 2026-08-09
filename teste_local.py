@@ -124,6 +124,45 @@ def teste_injecao() -> None:
     injetor.mover_para(*origem)
 
 
+def teste_shift_direito() -> None:
+    """Regressao: o Shift direito nao funcionava no PC comandado.
+
+    O hook de baixo nivel entrega o Shift direito com LLKHF_EXTENDED ligado, e o
+    injetor repassava o flag adiante. So' que `E0 36` NAO e' o Shift direito: e'
+    o "fake shift" que o Windows fabrica em volta das teclas do teclado
+    numerico. O outro PC recebia um evento que o Windows descarta em silencio.
+    O Shift esquerdo escapava porque o scancode dele (0x2A) chega sem o flag.
+
+    Nao injeta nada: inspeciona o INPUT montado. Assim vale tambem em desktop
+    que nao aceita injecao -- que e' justamente onde o bug passou despercebido.
+    """
+    print("Shift direito nao pode virar E0 36")
+    injetor = ew.Injetor()
+    enviados: list = []
+    injetor._enviar = lambda *entradas: enviados.extend(entradas)
+
+    def flags(vk: int, scan: int, ext: bool, pressionar: bool = True) -> int:
+        enviados.clear()
+        injetor.tecla(vk, scan, ext, pressionar)
+        return enviados[0].ki.dwFlags
+
+    checar("Shift direito perde a estendida (o hook diz True)",
+           not flags(0xA1, 0x36, True) & ew.KEYEVENTF_EXTENDEDKEY)
+    checar("Shift direito continua indo por scancode",
+           bool(flags(0xA1, 0x36, True) & ew.KEYEVENTF_SCANCODE))
+    checar("keyup do Shift direito tambem perde a estendida",
+           not flags(0xA1, 0x36, True, False) & ew.KEYEVENTF_EXTENDEDKEY
+           and bool(flags(0xA1, 0x36, True, False) & ew.KEYEVENTF_KEYUP))
+    # Ctrl e Alt direitos sao o contraste: neles o prefixo E0 E' a tecla certa,
+    # entao uma "correcao" que zerasse a estendida para todo mundo os quebraria.
+    checar("Ctrl direito mantem a estendida (E0 1D e' a tecla)",
+           bool(flags(0xA3, 0x1D, True) & ew.KEYEVENTF_EXTENDEDKEY))
+    checar("Alt direito mantem a estendida (E0 38 e' a tecla)",
+           bool(flags(0xA5, 0x38, True) & ew.KEYEVENTF_EXTENDEDKEY))
+    checar("Shift esquerdo segue sem estendida",
+           not flags(0xA0, 0x2A, False) & ew.KEYEVENTF_EXTENDEDKEY)
+
+
 def teste_hooks() -> None:
     print("hooks de baixo nivel")
     captura = ew.Captura(lambda ev: False)  # nunca bloqueia: seguro
@@ -489,6 +528,7 @@ def main() -> int:
     teste_clipboard()
     teste_layout()
     teste_injecao()
+    teste_shift_direito()
     teste_hooks()
     teste_roteamento()
     teste_quique()
