@@ -71,6 +71,7 @@ class Servidor:
             conectados = sorted(self.clientes)
         return {"papel": "servidor", "eu": self.eu, "conectados": conectados,
                 "cursor_em": self.controle.atual,
+                "comandante": self.controle.comandante,
                 "erro": "" if conectados else self.ultimo_erro,
                 "esperados": [p.nome for p in self.layout.pcs
                               if p.nome != self.eu]}
@@ -233,6 +234,21 @@ class Servidor:
         if tipo == "sair":
             self.controle.saiu_do_cliente(nome, msg["dir"], msg["rel"])
             self.ao_mudar()
+        elif tipo == "assumir":
+            # O cliente tem teclado e mouse proprios e encostou o cursor dele
+            # numa borda: quer comandar o vizinho daquele lado.
+            self.controle.pedir_comando(nome, msg["dir"], msg["rel"])
+            self.ao_mudar()
+        elif tipo == "in":
+            self.controle.do_comandante(nome, msg.get("ev") or {})
+        elif tipo == "largar":
+            self.controle.devolveu_o_comando(nome)
+            self.ao_mudar()
+        elif tipo == "panico":
+            # Panico apertado no teclado do cliente: ele quer o proprio PC de
+            # volta, e so' o servidor pode soltar o cursor.
+            self.controle.largar(f"panico no teclado de '{nome}'")
+            self.ao_mudar()
         elif tipo == "clip":
             if self.sinc is not None:
                 self.sinc.aplicar(msg)
@@ -261,8 +277,7 @@ class Servidor:
             except queue.Empty:
                 continue
             if destino == borda.LOCAL:
-                if ev["t"] == "soltar_local":
-                    self.injetor.soltar_modificadores()
+                self._agir_aqui(ev)
                 continue
             with self._lock:
                 conn = self.clientes.get(destino)
@@ -274,6 +289,29 @@ class Servidor:
             except Exception as exc:
                 log.warning("falha ao enviar para '%s': %s", destino, exc)
                 conn.fechar()
+
+    def _agir_aqui(self, ev: dict) -> None:
+        """Acoes no proprio servidor, fora do callback do hook.
+
+        Tudo o que mexe no input local passa por aqui: chamar SendInput de dentro
+        do callback de um hook e' re-entrar na pilha de input, e o Windows
+        desinstala o hook em silencio se o callback demorar.
+        """
+        tipo = ev.get("t")
+        if tipo == "soltar_local":
+            self.injetor.soltar_modificadores()
+        elif tipo == "por_cursor":
+            # Este PC e' o alvo: quem comanda e' o teclado de outra maquina.
+            self.injetor.mover_para(ev["x"], ev["y"])
+        elif tipo == "injetar":
+            interno = ev.get("ev") or {}
+            if interno.get("t") == "btn":
+                self.injetor.botao(interno["b"], interno["down"])
+            elif interno.get("t") == "whl":
+                self.injetor.roda(interno["d"], interno["h"])
+            elif interno.get("t") == "key":
+                self.injetor.tecla(interno["vk"], interno["sc"],
+                                   interno["ext"], interno["down"])
 
     def _pingar(self) -> None:
         while not self.parar.wait(INTERVALO_PING):

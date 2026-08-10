@@ -154,7 +154,7 @@ def _rede() -> list[str]:
     return linhas
 
 
-def _achados(farol) -> list[str]:
+def _achados(farol, cfg: dict) -> list[str]:
     linhas = _secao("pcs encontrados na rede")
     if farol is None:
         linhas.append("  nao disponivel: o farol so' roda com o programa aberto")
@@ -164,12 +164,30 @@ def _achados(farol) -> list[str]:
     if not lista:
         linhas.append("  NENHUM. Se o outro PC esta' aberto, verifique: mesma")
         linhas.append("  sub-rede, rede marcada como Particular, e Firewall liberado.")
+    minha_porta = int(cfg.get("porta", 24810))
+    portas_diferentes = []
     for d in lista:
         versao = d.get("versao", "?")
-        alerta = "  <- versao diferente da deste PC" if versao != conf.VERSAO else ""
+        porta = d.get("porta") or 0
+        alertas = []
+        if versao != conf.VERSAO:
+            alertas.append("versao diferente da deste PC")
+        if porta and porta != minha_porta:
+            alertas.append(f"PORTA {porta}, e este PC usa {minha_porta}")
+            portas_diferentes.append(d["nome"])
+        alerta = ("  <- " + "; ".join(alertas)) if alertas else ""
         linhas.append(f"  {d['nome']:<20} {d['ip']:<16} {d['papel']:<9} "
-                      f"v{versao:<6} chave {d['chave']}  outros IPs: "
-                      f"{', '.join(d.get('ips', [])) or '-'}{alerta}")
+                      f"v{versao:<6} porta {porta or '?':<6} chave {d['chave']}  "
+                      f"outros IPs: {', '.join(d.get('ips', [])) or '-'}{alerta}")
+    if portas_diferentes:
+        linhas += [
+            "",
+            f"  >> CAUSA PROVAVEL DA FALHA: {', '.join(portas_diferentes)} usa(m)",
+            f"     uma porta TCP diferente da deste PC ({minha_porta}). Enquanto",
+            "     as duas nao forem iguais, a conexao nunca acontece -- e o erro",
+            "     que aparece e' 'nao respondeu', igual ao de Firewall barrando.",
+            "     Corrija no campo Porta, nos dois PCs.",
+        ]
     return linhas
 
 
@@ -219,7 +237,7 @@ def gerar(cfg: dict, farol=None, destino: pathlib.Path | None = None) -> pathlib
     partes += _sistema()
     partes += _configuracao(cfg)
     partes += _rede()
-    partes += _achados(farol)
+    partes += _achados(farol, cfg)
     partes += _testes(cfg)
     partes += _secao(f"log (ultimas {LINHAS_DE_LOG} linhas)")
     partes += fim_do_log

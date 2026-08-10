@@ -167,16 +167,19 @@ class Janela(tk.Tk):
         # -- PCs achados na rede
         rede = ttk.LabelFrame(self, text=" Encontrados na rede ")
         rede.grid(row=2, column=0, sticky="new", padx=(10, 5), pady=4)
-        self.arvore_rede = ttk.Treeview(rede, columns=("ip", "papel", "chave"),
+        self.arvore_rede = ttk.Treeview(rede,
+                                        columns=("ip", "papel", "porta", "chave"),
                                         show="tree headings", height=4,
                                         selectmode="browse")
         self.arvore_rede.heading("#0", text="Nome")
         self.arvore_rede.heading("ip", text="IP")
         self.arvore_rede.heading("papel", text="Papel")
+        self.arvore_rede.heading("porta", text="Porta")
         self.arvore_rede.heading("chave", text="Chave")
         self.arvore_rede.column("#0", width=150)
         self.arvore_rede.column("ip", width=120)
         self.arvore_rede.column("papel", width=70, anchor="center")
+        self.arvore_rede.column("porta", width=80, anchor="center")
         self.arvore_rede.column("chave", width=80, anchor="center")
         self.arvore_rede.grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4))
         self.arvore_rede.bind("<Double-1>", lambda _e: self._adicionar_encontrado())
@@ -642,7 +645,9 @@ class Janela(tk.Tk):
         anterior = selecao[0] if selecao else None
         self.arvore_rede.delete(*self.arvore_rede.get_children())
         minha_chave = descoberta.impressao_da_chave(self.var_chave.get().strip())
+        minha_porta = self._porta_da_tela()
         novos = 0
+        divergentes = []
         for d in achados:
             if d["chave"] and minha_chave and d["chave"] != minha_chave:
                 situacao = "outra"
@@ -650,18 +655,38 @@ class Janela(tk.Tk):
                 situacao = "confere"
             else:
                 situacao = "?"
+            porta = d.get("porta") or 0
+            # A porta e' um so' numero para toda a rodada: se este PC procura
+            # numa porta e o outro escuta em outra, nada conecta -- e o sintoma
+            # (tempo esgotado) e' identico ao de Firewall barrando.
+            if porta and minha_porta and porta != minha_porta:
+                divergentes.append(d["nome"])
+                texto_porta = f"{porta}  != daqui"
+            else:
+                texto_porta = str(porta or "?")
             ja_esta = self._pc(d["nome"]) is not None
             novos += 0 if ja_esta else 1
             self.arvore_rede.insert("", "end", iid=d["nome"],
                                     text=d["nome"] + ("  (ja' no layout)"
                                                       if ja_esta else ""),
-                                    values=(d["ip"], d["papel"], situacao))
+                                    values=(d["ip"], d["papel"], texto_porta,
+                                            situacao))
         if anterior and self.arvore_rede.exists(anterior):
             self.arvore_rede.selection_set(anterior)
         if not achados:
             self.var_rede.set("procurando... (abra o programa nos outros PCs)")
+        elif divergentes:
+            self.var_rede.set(f"{', '.join(divergentes)} esta' em outra PORTA -- "
+                              f"use a mesma nos dois (aqui: {minha_porta})")
         else:
             self.var_rede.set(f"{len(achados)} encontrado(s), {novos} fora do layout")
+
+    def _porta_da_tela(self) -> int:
+        """A porta escrita no campo, ou 0 se ainda nao for um numero."""
+        try:
+            return int(self.var_porta.get().strip())
+        except ValueError:
+            return 0
 
     def _adicionar_encontrado(self) -> None:
         selecao = self.arvore_rede.selection()
@@ -675,15 +700,33 @@ class Janela(tk.Tk):
             existente["ip"] = achado["ip"]  # atualiza o IP, que pode ter mudado
             self.selecionado = existente["nome"]
             self._redesenhar()
-            self._avisar(f"IP de '{achado['nome']}' atualizado para {achado['ip']}")
+            extra = self._adotar_porta(achado)
+            self._avisar(f"IP de '{achado['nome']}' atualizado para "
+                         f"{achado['ip']}{extra}")
             return
         self._novo_pc(achado["nome"], achado["ip"])
         # Se ele se anuncia como servidor e aqui ninguem e', aceita a indicacao.
         if achado["papel"] == "servidor" and not any(p.get("servidor")
                                                      for p in self._pcs()):
             self._marcar_servidor()
-        self._avisar(f"'{achado['nome']}' adicionado -- arraste-o no mapa para a "
-                     "posicao do monitor dele")
+        extra = self._adotar_porta(achado)
+        self._avisar(f"'{achado['nome']}' adicionado{extra} -- arraste-o no mapa "
+                     "para a posicao do monitor dele")
+
+    def _adotar_porta(self, achado: dict) -> str:
+        """Copia a porta de um servidor encontrado. Devolve o aviso a acrescentar.
+
+        Quem manda na porta e' o servidor: e' ele que fica escutando. Adotar a
+        dele aqui evita o caso em que os dois se veem na busca mas nenhum
+        conecta, com a mensagem de sempre culpando o Firewall.
+        """
+        porta = achado.get("porta") or 0
+        if achado.get("papel") != "servidor" or not porta:
+            return ""
+        if porta == self._porta_da_tela():
+            return ""
+        self.var_porta.set(str(porta))
+        return f" (porta ajustada para {porta}, a mesma do servidor)"
 
     # -- chave, opcoes, gravacao -------------------------------------------
 

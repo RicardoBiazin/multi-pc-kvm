@@ -44,6 +44,10 @@ class Motor:
             partes.append("aguardando: " + ", ".join(faltando))
         if s["papel"] == "servidor":
             partes.append("cursor em " + (s["cursor_em"] or "?"))
+            if s.get("comandante") and s["comandante"] != s["eu"]:
+                partes.append(f"comandado por {s['comandante']}")
+        elif s.get("comandando"):
+            partes.append("comandando " + (s["cursor_em"] or "o outro PC"))
         elif s["cursor_em"]:
             partes.append("cursor aqui")
         return " | ".join(partes)

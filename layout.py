@@ -68,6 +68,13 @@ class Layout:
         for p in self.pcs:
             if not p.servidor and not p.ip:
                 problemas.append(f"{p.nome or '(sem nome)'} esta' sem IP")
+        # 127.x e' a propria maquina: nenhum PC do layout e' alcancavel por ele,
+        # nem o proprio -- o campo existe para os OUTROS chegarem ate' aqui.
+        for p in self.pcs:
+            if p.ip.startswith("127."):
+                problemas.append(f"{p.nome or '(sem nome)'} esta' com o IP "
+                                 f"{p.ip}, que e' a propria maquina. Use o IP "
+                                 f"que esse PC tem na rede.")
         if servidores and not servidores[0].ip:
             problemas.append(f"{servidores[0].nome} e' o servidor e precisa do "
                              "proprio IP, para os outros o encontrarem")
@@ -185,6 +192,25 @@ def direcao_de_saida(x: float, y: float, x0: int, y0: int,
         return "cima"
     if y > y0 + altura - 1:
         return "baixo"
+    return None
+
+
+def aresta_encostada(x: float, y: float, x0: int, y0: int,
+                     largura: int, altura: int) -> str | None:
+    """Em qual aresta o cursor esta' encostado, ou None.
+
+    Diferente de `direcao_de_saida`: aqui o ponto veio do Windows, que ja' prende
+    o cursor dentro da tela -- entao "saiu" nunca acontece, e "encostado" e' o
+    unico sinal de que o usuario esta' tentando atravessar.
+    """
+    if x >= x0 + largura - 1:
+        return "direita"
+    if x <= x0:
+        return "esquerda"
+    if y >= y0 + altura - 1:
+        return "baixo"
+    if y <= y0:
+        return "cima"
     return None
 
 

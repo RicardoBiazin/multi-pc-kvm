@@ -11,7 +11,25 @@ janela. Licença MIT.
 | Atalho | O que faz |
 |---|---|
 | **Ctrl+Alt+1…9** | leva teclado e mouse direto para o N-ésimo PC da lista |
-| **Ctrl+Alt+Shift+Esc** | pânico: devolve tudo ao servidor |
+| **Ctrl+Alt+Shift+Esc** | pânico: devolve tudo ao PC onde foi apertado |
+
+## Os dois PCs têm teclado e mouse?
+
+Funciona nos dois sentidos (desde a v1.2). Qualquer PC do layout pode comandar
+os outros: encoste o cursor **daquele** PC na borda do lado do PC que quer
+controlar, e o teclado e o mouse dele passam a mandar nos dois.
+
+- Quem comanda é sempre **um** por vez. Mexer no teclado ou no mouse do outro PC
+  traz o comando de volta para ele na hora — não precisa de atalho.
+- Enquanto este PC estiver **sendo comandado**, o mouse local dele continua
+  solto: mexer nele não rouba o cursor de quem está do outro lado.
+- **Ctrl+Alt+Shift+Esc** devolve o comando ao PC onde foi apertado, em qualquer
+  situação. É a saída se algo travar.
+- Se a rede cair no meio, o PC que estava comandando libera o próprio teclado
+  sozinho — nunca fica bloqueado esperando.
+
+Um cliente sem teclado e mouse próprios não muda em nada: ele simplesmente nunca
+pede o comando.
 
 ## Instalação
 
@@ -149,7 +167,8 @@ Sem elevação o Windows bloqueia captura e injeção sobre janelas elevadas
 | `motor.py` | Liga/desliga o papel certo numa thread |
 | `configuracao.py` | config.json, IP local, início automático com o Windows |
 | `layout.py` | Posições, vizinhança nas 4 direções, geometria de entrada/saída |
-| `borda.py` | Roteamento do cursor entre os PCs (roda dentro do hook) |
+| `borda.py` | Roteamento do cursor e de quem comanda (roda dentro do hook) |
+| `alvo.py` | Lado que **recebe** o cursor: posição virtual, trava e saída |
 | `entrada_win.py` | Win32 via ctypes: hooks `WH_MOUSE_LL`/`WH_KEYBOARD_LL` e `SendInput` |
 | `protocolo.py` | TCP com frames de tamanho fixo, handshake HMAC e cifra Fernet |
 | `clipboard_win.py` | Clipboard: texto `CF_UNICODETEXT`, imagem `CF_DIB` ↔ PNG |
@@ -167,6 +186,14 @@ por tal aresta, nesta altura" e espera a resposta.
 A aresta por onde o cursor acabou de entrar fica travada até ele se afastar
 40 px dela ou passar 0,6 s — sem isso, um tremor de mão o devolvia antes de dar
 para ver.
+
+O servidor guarda duas coisas separadas: de quem é o **cursor** (`atual`) e de
+quem é o **teclado e o mouse** (`comandante`). Até a v1.1 o comandante era sempre
+o servidor. Agora um cliente pode pedir o comando, e aí os papéis se invertem —
+o servidor passa a usar o mesmo `alvo.Alvo` do cliente e recebe o input pela
+rede. O roteamento continua todo no servidor, que é o que impede os dois lados de
+divergirem. Não há risco de laço entre a injeção e a captura: o hook descarta
+tudo o que vem com `LLMHF_INJECTED`, que inclui o nosso próprio `SetCursorPos`.
 
 Um **vigia** compara o Raw Input (que chega por mensagem de janela) com os hooks:
 se o Raw Input está recebendo movimento e os hooks não, o Windows os descartou em
@@ -235,7 +262,11 @@ condições.
 ## Limitações conhecidas
 
 - Windows ↔ Windows apenas.
-- Um servidor; os demais são clientes.
+- Um servidor; os demais são clientes. Qualquer um deles pode **comandar**, mas
+  o roteamento passa sempre pelo servidor: com ele fechado, ninguém comanda.
+- A **porta TCP** tem de ser a mesma em todos os PCs. Se divergir, os PCs se
+  enxergam na busca da rede mas nunca conectam; o painel *Encontrados na rede* e
+  o relatório avisam quando isso acontece.
 - A busca na rede é por broadcast UDP: só enxerga PCs na **mesma sub-rede**.
   Entre VLANs ou por VPN, adicione os PCs à mão pelo IP.
 - Sem transferência de arquivos — só texto e imagem no clipboard.
