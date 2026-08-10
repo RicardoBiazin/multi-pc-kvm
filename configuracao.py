@@ -17,7 +17,7 @@ import sys
 
 APP = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
-VERSAO = "1.1"
+VERSAO = "1.2"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 

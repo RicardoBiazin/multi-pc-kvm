@@ -17,6 +17,7 @@ import time
 
 from PIL import Image
 
+import alvo as alv
 import borda
 import cliente
 import clipboard_win as cw
@@ -24,6 +25,29 @@ import entrada_win as ew
 import layout as lay
 
 falhas: list[str] = []
+
+
+def cliente_falso(enviados: list, injetado: list) -> "cliente.Cliente":
+    """Um Cliente sem rede, sem hooks e sem mexer no mouse de verdade."""
+    cli = cliente.Cliente.__new__(cliente.Cliente)
+    cli.x0, cli.y0, cli.largura, cli.altura = 0, 0, 2560, 1080
+    cli.monitores = [(0, 0, 2560, 1080)]
+    cli.alvo = alv.Alvo(0, 0, 2560, 1080, cli.monitores)
+    cli.injetor = type("I", (), {
+        "mover_para": lambda s, x, y: injetado.append((x, y)),
+        "soltar_modificadores": lambda s: None})()
+    cli.remoto = cli.aguardando = False
+    cli.conectado = True
+    cli.ao_mudar = lambda: None
+    cli.ao_trocar = lambda de, para: None
+    cli.eu = "esq"
+    cli.layout = lay.Layout([lay.PC("SRV", "1", 2, 1, True),
+                             lay.PC("esq", "2", 1, 1)])
+    cli.fila = None
+    cli.enfileirar = lambda ev: enviados.append(ev)
+    cli.comando = cliente.ComandoLocal(cli)
+    cli.comando.ancora = (1280, 540)
+    return cli
 
 
 def checar(nome: str, condicao: bool, extra: str = "") -> None:
@@ -268,36 +292,21 @@ def teste_quique() -> None:
     class ConnFalsa:
         def enviar(self, msg): enviados.append(msg)
 
-    cli = cliente.Cliente.__new__(cliente.Cliente)
-    cli.x0, cli.y0, cli.largura, cli.altura = 0, 0, 2560, 1080
-    cli.monitores = [(0, 0, 2560, 1080)]
-    cli.injetor = type("I", (), {
-        "mover_para": lambda s, x, y: injetado.append((x, y)),
-        "soltar_modificadores": lambda s: None})()
-    cli.remoto = cli.aguardando = False
-    cli.aresta_de_entrada = ""
-    cli.pode_voltar = True
-    cli.entrou_em = 0.0
-    cli.vx = cli.vy = 0.0
-    cli.ao_mudar = lambda: None
-    cli.ao_trocar = lambda de, para: None
-    cli.eu = "esq"
-    cli.layout = lay.Layout([lay.PC("SRV", "1", 2, 1, True),
-                             lay.PC("esq", "2", 1, 1)])
+    cli = cliente_falso(enviados, injetado)
 
     conn = ConnFalsa()
     cli._aplicar(conn, None, {"t": "entrar", "de": "direita", "rel": 0.5})
     checar("entrou perto da borda direita",
-           abs(injetado[-1][0] - (2560 - 1 - cliente.MARGEM)) < 1)
+           abs(injetado[-1][0] - (2560 - 1 - alv.MARGEM)) < 1)
 
     enviados.clear()
     for _ in range(12):  # tremores no sentido da borda por onde entrou
         cli._aplicar(conn, None, {"t": "mv", "dx": 8, "dy": 0})
     checar("tremor de volta nao devolve o controle", enviados == [], str(enviados))
 
-    cli._aplicar(conn, None, {"t": "mv", "dx": -cliente.FOLGA_DE_ENTRADA - 10,
+    cli._aplicar(conn, None, {"t": "mv", "dx": -alv.FOLGA_DE_ENTRADA - 10,
                               "dy": 0})
-    checar("afastar-se da borda libera a volta", cli.pode_voltar is True)
+    checar("afastar-se da borda libera a volta", cli.alvo.pode_voltar is True)
     cli._aplicar(conn, None, {"t": "mv", "dx": 300, "dy": 0})
     checar("depois disso, voltar devolve o controle",
            len(enviados) == 1 and enviados[0]["dir"] == "direita", str(enviados))
@@ -307,7 +316,7 @@ def teste_quique() -> None:
     enviados.clear()
     cli.remoto = cli.aguardando = False
     cli._aplicar(conn, None, {"t": "entrar", "de": "direita", "rel": 0.5})
-    cli.entrou_em -= cliente.TRAVA_DE_ENTRADA + 0.05  # simula o tempo passando
+    cli.alvo.entrou_em -= alv.TRAVA_DE_ENTRADA + 0.05  # simula o tempo passando
     enviados.clear()
     cli._aplicar(conn, None, {"t": "mv", "dx": 20, "dy": 0})
     checar("passada a trava de tempo, volta sem precisar andar para dentro",
@@ -316,9 +325,7 @@ def teste_quique() -> None:
     # a aresta oposta nunca fica travada
     enviados.clear()
     injetado.clear()
-    cli2 = cliente.Cliente.__new__(cliente.Cliente)
-    cli2.__dict__.update(cli.__dict__)
-    cli2.remoto = cli2.aguardando = False
+    cli2 = cliente_falso(enviados, injetado)
     cli2._aplicar(conn, None, {"t": "entrar", "de": "direita", "rel": 0.5})
     enviados.clear()
     cli2._aplicar(conn, None, {"t": "mv", "dx": -5000, "dy": 0})
@@ -521,6 +528,159 @@ def teste_multi_monitor() -> None:
            == lay.ponto_de_entrada("esquerda", 0.5, 0, 0, 1000, 500, 4, None))
 
 
+def teste_comando_do_cliente() -> None:
+    """O cliente com teclado e mouse proprios pedindo e exercendo o comando."""
+    print("comando vindo do cliente (lado cliente)")
+    enviados: list[dict] = []
+    injetado: list[tuple] = []
+    cli = cliente_falso(enviados, injetado)
+    cmd = cli.comando
+
+    # 'esq' esta' na coluna 1 e SRV na 2: o vizinho da direita e' o servidor.
+    checar("mouse no meio nao pede nada",
+           cmd.tratar({"t": "mv", "pos": (600, 500)}) is False and enviados == [])
+    engoliu = cmd.tratar({"t": "mv", "pos": (2559, 540)})
+    checar("borda direita pede o comando",
+           enviados and enviados[-1]["t"] == "assumir"
+           and enviados[-1]["dir"] == "direita", str(enviados))
+    checar("mas nao engole o evento antes de o servidor conceder",
+           engoliu is False)
+
+    enviados.clear()
+    cmd.tratar({"t": "mv", "pos": (2559, 545)})
+    checar("nao repete o pedido a cada tremida", enviados == [], str(enviados))
+
+    # Sem o comando concedido, o teclado local continua sendo do proprio PC.
+    tecla = {"t": "key", "vk": 65, "sc": 30, "ext": False, "down": True}
+    checar("tecla local passa direto enquanto nao comandamos",
+           cmd.tratar(tecla) is False)
+
+    cmd.responder(True)
+    checar("comando concedido", cmd.comandando is True)
+    checar("cursor tirado da borda", injetado[-1] == (1280, 540), str(injetado))
+    enviados.clear()
+    checar("agora a tecla e' engolida", cmd.tratar(tecla) is True)
+    checar("e vai para o servidor",
+           enviados[-1] == {"t": "in", "ev": tecla}, str(enviados))
+    enviados.clear()
+    cmd.delta_bruto(13, -7)
+    checar("movimento vai pelo Raw Input",
+           enviados[-1] == {"t": "in", "ev": {"t": "mv", "dx": 13, "dy": -7}},
+           str(enviados))
+    checar("a posicao do hook e' engolida sem virar movimento",
+           cmd.tratar({"t": "mv", "pos": (10, 10)}) is True)
+
+    # Panico com o comando na mao: solta o bloqueio e avisa o servidor.
+    enviados.clear()
+    cliente.ew.modificador_pressionado = lambda vk: True
+    cmd.tratar({"t": "key", "vk": ew.VK_ESCAPE, "sc": 1, "ext": False,
+                "down": True})
+    checar("panico larga o comando", cmd.comandando is False)
+    checar("e avisa o servidor",
+           {"t": "largar"} in enviados, str(enviados))
+    cliente.ew.modificador_pressionado = ew.modificador_pressionado
+
+    # O cursor voltando para ca': para de comandar sem pedir nada.
+    cmd.comandando = True
+    injetado.clear()
+    cmd.devolver("direita", 0.5)
+    checar("'devolver' encerra o comando", cmd.comandando is False)
+    checar("e recoloca o cursor na borda direita",
+           abs(injetado[-1][0] - (2560 - 1 - alv.MARGEM)) < 1, str(injetado))
+
+    # Sendo comandado de fora, o mouse local fica solto e nao rouba o cursor.
+    cli.remoto = True
+    enviados.clear()
+    cmd._liberado_em = 0.0
+    cmd._pedido_em = 0.0
+    checar("enquanto e' comandado, a borda local nao pede o comando",
+           cmd.tratar({"t": "mv", "pos": (2559, 540)}) is False
+           and enviados == [], str(enviados))
+
+
+def teste_comando_no_servidor() -> None:
+    """O servidor virando alvo do teclado de um cliente."""
+    print("comando vindo do cliente (lado servidor)")
+    x0, y0, largura, altura = ew.geometria_virtual()
+    movidos: list = []
+    borda.ew.mover_cursor = lambda x, y: movidos.append((x, y))
+    enviados: list[tuple[str, dict]] = []
+    ctl = borda.Controle(_layout_de_teste(), "B",
+                         lambda destino, msg: enviados.append((destino, msg)))
+    ctl.conectados.update({"A", "C", "D"})
+
+    checar("no comeco quem comanda e' o servidor", ctl.comandante == "B")
+
+    # A esta' a' esquerda de B: saindo pela direita, A pede o comando de B.
+    ctl.pedir_comando("A", "direita", 0.5)
+    checar("o comando passou para A", ctl.comandante == "A")
+    checar("A foi avisado de que pode comandar",
+           ("A", {"t": "comando", "ok": True}) in enviados, str(enviados))
+    checar("o cursor ficou no servidor", ctl.atual == "B")
+    checar("e o servidor virou alvo", ctl.sou_o_alvo is True)
+    entrada = lay.ponto_de_entrada("esquerda", 0.5, x0, y0, largura, altura,
+                                   alv.MARGEM)
+    checar("cursor posto na borda esquerda do servidor",
+           enviados[-1][0] == borda.LOCAL
+           and abs(enviados[-1][1]["x"] - entrada[0]) < 1, str(enviados[-1]))
+
+    # Input de A: o servidor injeta em si mesmo, nao manda para a rede.
+    enviados.clear()
+    ctl.do_comandante("A", {"t": "mv", "dx": 40, "dy": 0})
+    checar("movimento de quem comanda vira injecao local",
+           enviados[-1][0] == borda.LOCAL and enviados[-1][1]["t"] == "por_cursor",
+           str(enviados[-1]))
+    enviados.clear()
+    tecla = {"t": "key", "vk": 66, "sc": 48, "ext": False, "down": True}
+    ctl.do_comandante("A", tecla)
+    checar("tecla de quem comanda tambem",
+           enviados[-1] == (borda.LOCAL, {"t": "injetar", "ev": tecla}),
+           str(enviados[-1]))
+    enviados.clear()
+    ctl.do_comandante("C", {"t": "mv", "dx": 500, "dy": 0})
+    checar("input de quem NAO comanda e' ignorado", enviados == [], str(enviados))
+
+    # Empurrando para a direita: C e' vizinho de B daquele lado.
+    enviados.clear()
+    ctl.do_comandante("A", {"t": "mv", "dx": largura + 500, "dy": 0})
+    checar("o cursor atravessa para C", ctl.atual == "C")
+    checar("C recebeu 'entrar', nao 'devolver'",
+           any(d == "C" and m.get("t") == "entrar" for d, m in enviados),
+           str(enviados))
+    checar("A continua comandando", ctl.comandante == "A")
+    enviados.clear()
+    ctl.do_comandante("A", {"t": "mv", "dx": 5, "dy": 0})
+    checar("agora o movimento e' repassado a C",
+           enviados[-1] == ("C", {"t": "mv", "dx": 5, "dy": 0}), str(enviados))
+
+    # De C para a esquerda -> B; de B para a esquerda -> A, que e' quem comanda.
+    enviados.clear()
+    ctl.saiu_do_cliente("C", "esquerda", 0.5)
+    checar("voltou ao servidor como alvo",
+           ctl.atual == "B" and ctl.sou_o_alvo is True)
+    enviados.clear()
+    ctl.do_comandante("A", {"t": "mv", "dx": -(largura + 500), "dy": 0})
+    checar("o cursor volta para quem comanda", ctl.atual == "A")
+    checar("e A recebe 'devolver', nao 'entrar'",
+           any(d == "A" and m.get("t") == "devolver" for d, m in enviados),
+           str(enviados))
+
+    # Mexer no teclado/mouse do servidor traz o comando de volta.
+    enviados.clear()
+    checar("input fisico daqui nao e' engolido",
+           ctl.tratar({"t": "mv", "pos": (600, 500)}) is False)
+    checar("e o comando volta para o servidor", ctl.comandante == "B")
+    checar("A foi avisado de que perdeu o comando",
+           any(d == "A" and m.get("t") == "comando" and m.get("ok") is False
+               for d, m in enviados), str(enviados))
+
+    # Queda de quem comanda nao pode deixar o servidor esperando para sempre.
+    ctl.pedir_comando("A", "direita", 0.5)
+    checar("A comanda de novo", ctl.comandante == "A")
+    ctl.cliente_caiu("A")
+    checar("queda de quem comanda devolve o comando", ctl.comandante == "B")
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -536,6 +696,8 @@ def main() -> int:
     teste_atalho_e_troca()
     teste_layout_do_servidor()
     teste_multi_monitor()
+    teste_comando_do_cliente()
+    teste_comando_no_servidor()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

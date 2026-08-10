@@ -18,6 +18,11 @@ RAIZ = pathlib.Path(__file__).resolve().parent
 ICONE = RAIZ / "icone.ico"
 VERSAO_TXT = RAIZ / "versao.txt"
 
+# Copia do projeto no outro PC (\\192.168.10.2\DEV-Direito). E' de la' que a
+# outra maquina roda o programa, entao o .exe tem de ir junto a cada build: com
+# versoes diferentes nos dois lados o protocolo quebra, e sem barulho nenhum.
+ESPELHOS = (pathlib.Path("Y:/2pc_1Kit/dist"),)
+
 
 def gerar_versao() -> pathlib.Path:
     """Recurso de versao do Windows: alimenta as Propriedades do .exe."""
@@ -96,7 +101,11 @@ def main() -> int:
     gerar_versao()
     saida = destino()
     shutil.rmtree(RAIZ / "build", ignore_errors=True)
-    shutil.rmtree(saida, ignore_errors=True)
+    # So' o .exe, e nao a pasta inteira: o programa grava o log e os relatorios
+    # de diagnostico ao lado dele, e um rmtree aqui apagava justamente o que o
+    # usuario guardou para descobrir por que algo nao funcionou.
+    saida.mkdir(parents=True, exist_ok=True)
+    (saida / "2pc_1Kit.exe").unlink(missing_ok=True)
 
     comando = [
         sys.executable, "-m", "PyInstaller",
@@ -120,9 +129,25 @@ def main() -> int:
 
     exe = saida / "2pc_1Kit.exe"
     print(f"\nPronto: {exe}  ({exe.stat().st_size / 1e6:.1f} MB)")
-    print("Copie esse arquivo para cada PC e abra. Na primeira vez ele cria a")
-    print("configuracao; use a mesma chave em todas as maquinas.")
+    espelhar(exe)
+    print("\nNa primeira vez o programa cria a configuracao; use a mesma chave")
+    print("e a mesma PORTA em todas as maquinas.")
     return 0
+
+
+def espelhar(exe: pathlib.Path) -> None:
+    """Leva o .exe para as copias do projeto nos outros PCs."""
+    for pasta in ESPELHOS:
+        alvo = pasta / exe.name
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(exe, alvo)
+            print(f"Copiado tambem para: {alvo}")
+        except PermissionError:
+            print(f"NAO consegui copiar para {alvo}: o arquivo esta' em uso.")
+            print("   Feche o 2pc_1Kit naquele PC e rode de novo, ou copie a mao.")
+        except OSError as erro:
+            print(f"NAO consegui copiar para {alvo}: {erro}")
 
 
 if __name__ == "__main__":
