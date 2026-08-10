@@ -61,6 +61,10 @@ MOUSE_MOVE_ABSOLUTE = 0x01
 PAGINA_GENERICA, USO_MOUSE = 0x01, 0x02
 HWND_MESSAGE = -3
 
+CLASSE_RAW = "2pc1KitRawInput"
+GWLP_WNDPROC = -4
+ERRO_CLASSE_JA_EXISTE = 1410
+
 WM_APP = 0x8000
 MSG_REINSTALAR = WM_APP + 1  # pedido de reinstalacao para a thread dos hooks
 INTERVALO_VIGIA = 2.0    # s entre verificacoes do vigia
@@ -218,6 +222,16 @@ user32.CreateWindowExW.argtypes = [
     wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID]
 user32.CreateWindowExW.restype = wintypes.HWND
 user32.DestroyWindow.argtypes = [wintypes.HWND]
+user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
+user32.UnregisterClassW.restype = wintypes.BOOL
+# SetWindowLongPtrW so' existe no Windows de 64 bits; no de 32 quem faz o mesmo
+# papel e' SetWindowLongW, com o mesmo tamanho de ponteiro.
+_definir_wndproc = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+_definir_wndproc.argtypes = [wintypes.HWND, ctypes.c_int, WNDPROC]
+_definir_wndproc.restype = LRESULT
+_ler_wndproc = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
+_ler_wndproc.argtypes = [wintypes.HWND, ctypes.c_int]
+_ler_wndproc.restype = LRESULT
 
 user32.SetWindowsHookExW.restype = wintypes.HHOOK
 user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE,
@@ -529,19 +543,33 @@ class Captura(threading.Thread):
         classe = WNDCLASS()
         classe.lpfnWndProc = self._proc_janela
         classe.hInstance = kernel32.GetModuleHandleW(None)
-        classe.lpszClassName = "2pc1KitRawInput"
+        classe.lpszClassName = CLASSE_RAW
         if not user32.RegisterClassW(ctypes.byref(classe)):
             erro = ctypes.get_last_error()
-            if erro != 1410:  # ERROR_CLASS_ALREADY_EXISTS
+            if erro != ERRO_CLASSE_JA_EXISTE:
                 log.warning("RegisterClass falhou (erro %d)", erro)
                 return
         self._hwnd = user32.CreateWindowExW(
-            0, "2pc1KitRawInput", "2pc_1Kit", 0, 0, 0, 0, 0,
+            0, CLASSE_RAW, "2pc_1Kit", 0, 0, 0, 0, 0,
             wintypes.HWND(HWND_MESSAGE), None, classe.hInstance, None)
         if not self._hwnd:
             log.warning("nao consegui criar a janela de mensagens (erro %d)",
                         ctypes.get_last_error())
             return
+
+        # A classe de janela vale para o PROCESSO inteiro e guarda o WNDPROC de
+        # quem a registrou. Parar e reiniciar o servidor cria uma Captura nova,
+        # mas a classe da anterior sobrevive: o RegisterClass acima falha com
+        # ERROR_CLASS_ALREADY_EXISTS -- que toleramos -- e a janela nasce
+        # apontando para o WNDPROC da instancia MORTA. O WM_INPUT ia entao para
+        # um objeto cujo `ao_delta` nao comanda mais nada, e o movimento do mouse
+        # sumia em silencio. O teclado continuava funcionando, porque os hooks
+        # sao reinstalados a cada instancia -- era exatamente esse o sintoma:
+        # "religou o servidor, o mouse trava e so' o teclado funciona".
+        #
+        # Amarrar o WNDPROC A' JANELA, e nao a' classe, torna a instancia certa
+        # a dona das mensagens, independente de qual delas registrou a classe.
+        _definir_wndproc(self._hwnd, GWLP_WNDPROC, self._proc_janela)
 
         dispositivo = RAWINPUTDEVICE(PAGINA_GENERICA, USO_MOUSE, RIDEV_INPUTSINK,
                                      self._hwnd)
@@ -627,4 +655,10 @@ class Captura(threading.Thread):
         if self._hwnd:
             user32.DestroyWindow(self._hwnd)
             self._hwnd = None
+            # Cancelar o registro tambem, e nao so' destruir a janela: a classe
+            # sobrevive ao fim da thread e continua guardando o ponteiro para o
+            # WNDPROC desta instancia. Se o objeto for coletado, o ponteiro fica
+            # pendurado -- e o proximo CreateWindowEx nasceria apontando para
+            # memoria liberada.
+            user32.UnregisterClassW(CLASSE_RAW, kernel32.GetModuleHandleW(None))
         self.raw_ativo = False

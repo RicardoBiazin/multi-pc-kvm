@@ -11,6 +11,7 @@ de injecao move o cursor e o devolve ao lugar.
 from __future__ import annotations
 
 import base64
+import ctypes
 import io
 import sys
 import time
@@ -185,6 +186,44 @@ def teste_shift_direito() -> None:
            bool(flags(0xA5, 0x38, True) & ew.KEYEVENTF_EXTENDEDKEY))
     checar("Shift esquerdo segue sem estendida",
            not flags(0xA0, 0x2A, False) & ew.KEYEVENTF_EXTENDEDKEY)
+
+
+def teste_raw_input_apos_religar() -> None:
+    """Regressao: religar o servidor matava o mouse e deixava so' o teclado.
+
+    A classe de janela "2pc1KitRawInput" vale para o processo inteiro e guarda o
+    WNDPROC de quem a registrou. Parar e iniciar de novo cria uma Captura nova,
+    o RegisterClass falha com ERROR_CLASS_ALREADY_EXISTS -- que e' tolerado --
+    e a janela nascia apontando para o WNDPROC da instancia MORTA. O WM_INPUT
+    ia para um objeto que nao comandava mais nada e o movimento sumia em
+    silencio; o teclado sobrevivia porque os hooks sao reinstalados por
+    instancia.
+
+    Nao injeta nada e nao depende de mexer no mouse: pergunta ao Windows de quem
+    e' o WNDPROC da janela, que e' a pergunta que separa os dois casos.
+    """
+    print("Raw Input sobrevive a religar o servidor")
+
+    def endereco(proc) -> int:
+        return ctypes.cast(proc, ctypes.c_void_p).value
+
+    primeira = ew.Captura(lambda ev: False, lambda dx, dy: None)
+    primeira.start()
+    checar("1a captura instalou", primeira.pronta.wait(5))
+    checar("1a captura registrou o Raw Input", primeira.raw_ativo)
+    primeira.parar()
+
+    segunda = ew.Captura(lambda ev: False, lambda dx, dy: None)
+    segunda.start()
+    checar("2a captura instalou", segunda.pronta.wait(5))
+    checar("2a captura registrou o Raw Input", segunda.raw_ativo)
+    # O nucleo: a janela da 2a instancia tem de despachar para a 2a instancia.
+    dono = ew._ler_wndproc(segunda._hwnd, ew.GWLP_WNDPROC)
+    checar("o WM_INPUT vai para a captura NOVA",
+           dono == endereco(segunda._proc_janela))
+    checar("e nao para a instancia morta",
+           dono != endereco(primeira._proc_janela))
+    segunda.parar()
 
 
 def teste_hooks() -> None:
@@ -689,6 +728,7 @@ def main() -> int:
     teste_layout()
     teste_injecao()
     teste_shift_direito()
+    teste_raw_input_apos_religar()
     teste_hooks()
     teste_roteamento()
     teste_quique()
