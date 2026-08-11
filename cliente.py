@@ -271,6 +271,9 @@ class Cliente:
         if tipo == "clip":
             sinc.aplicar(msg)
             return
+        if tipo == "arq":
+            sinc.aplicar_arquivo(msg)
+            return
         if tipo == "ping":
             conn.enviar({"t": "pong", "ts": msg["ts"]})
             return

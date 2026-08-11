@@ -258,6 +258,13 @@ class Servidor:
             if self.sinc is not None:
                 self.sinc.aplicar(msg)
             self.difundir(msg, excluir=nome)  # repassa aos demais
+        elif tipo == "arq":
+            # Transferencia de arquivo: sao muitas mensagens e o clipboard so' e'
+            # tocado na ultima. O repasse aos demais mantem o comportamento do
+            # clipboard comum -- quem esta' na sala inteira recebe.
+            if self.sinc is not None:
+                self.sinc.aplicar_arquivo(msg)
+            self.difundir(msg, excluir=nome)
         elif tipo == "pong":
             ida_volta = (time.perf_counter() - msg["ts"]) * 1000
             if ida_volta > 30:

@@ -10,6 +10,7 @@ Imagens viajam como PNG (o DIB cru de um print de tela 4K passa de 30 MB).
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import logging
@@ -21,6 +22,8 @@ import pywintypes
 import win32clipboard as wcb
 import win32con
 from PIL import Image
+
+import arquivos
 
 log = logging.getLogger("clipboard")
 
@@ -115,6 +118,14 @@ def ler(tentativas: int = 3) -> dict | None:
 
 def _ler_uma_vez() -> dict | None:
     with _Aberto():
+        # CF_HDROP vem antes do texto: copiar arquivo no Explorer costuma deixar
+        # tambem uma versao em texto (o caminho), e mandar o caminho em vez do
+        # arquivo seria inutil do outro lado.
+        if wcb.IsClipboardFormatAvailable(win32con.CF_HDROP):
+            caminhos = wcb.GetClipboardData(win32con.CF_HDROP)
+            if caminhos:
+                return {"t": "clip", "fmt": "arquivos",
+                        "caminhos": [str(c) for c in caminhos]}
         if wcb.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
             texto = wcb.GetClipboardData(win32con.CF_UNICODETEXT)
             if texto:
@@ -145,6 +156,9 @@ def escrever(msg: dict, tentativas: int = 3) -> None:
     """
     if msg["fmt"] == "texto":
         formato, dados = win32con.CF_UNICODETEXT, msg["dados"]
+    elif msg["fmt"] == "arquivos":
+        formato = win32con.CF_HDROP
+        dados = arquivos.montar_hdrop(msg["caminhos"])
     else:
         formato = win32con.CF_DIB
         dados = _png_para_dib(base64.b64decode(msg["dados"]))
@@ -163,8 +177,14 @@ def escrever(msg: dict, tentativas: int = 3) -> None:
 
 def impressao(msg: dict) -> str:
     """Hash do conteudo, usado para nao devolver ao outro PC o que veio dele."""
-    dados = msg["dados"]
-    bruto = dados.encode("utf-8") if isinstance(dados, str) else dados
+    if msg["fmt"] == "arquivos":
+        # A impressao e' dos CAMINHOS, nao do conteudo: ler MB de arquivo a cada
+        # 0,3 s de polling so' para calcular hash seria absurdo. Caminho basta --
+        # o clipboard guarda caminho, e e' ele que muda quando a selecao muda.
+        bruto = "\0".join(msg["caminhos"]).encode("utf-8")
+    else:
+        dados = msg["dados"]
+        bruto = dados.encode("utf-8") if isinstance(dados, str) else dados
     return hashlib.sha256(msg["fmt"].encode() + b"\0" + bruto).hexdigest()
 
 
@@ -186,6 +206,20 @@ class Sincronizador(threading.Thread):
         self._ultima = None
         self._sequencia = None
         self._lock = threading.Lock()
+        self._recepcao = arquivos.Recepcao()
+
+    def aplicar_arquivo(self, msg: dict) -> None:
+        """Consome uma mensagem 'arq'. Ao completar, poe os arquivos no clipboard.
+
+        Separado de `aplicar` porque uma transferencia sao muitas mensagens, e o
+        clipboard so' e' tocado na ultima -- antes disso nao ha' arquivo inteiro
+        para colar.
+        """
+        prontos = self._recepcao.aplicar(msg)
+        if prontos is None:
+            return
+        self.aplicar({"t": "clip", "fmt": "arquivos",
+                      "caminhos": [str(c) for c in prontos]})
 
     def aplicar(self, msg: dict) -> None:
         # O lock fica preso durante toda a escrita: se o poller rodasse no meio,
@@ -211,6 +245,30 @@ class Sincronizador(threading.Thread):
                               exc_info=True)
         log.info("clipboard recebido (%s)", msg["fmt"])
 
+    def _enviar_arquivos(self, caminhos: list[str]) -> None:
+        """Manda a selecao em blocos. Nada e' enviado se `preparar` recusar."""
+        pronto = arquivos.preparar(caminhos)
+        if pronto is None:
+            return
+        lista, total = pronto
+        # O identificador nomeia a pasta no outro lado; o relogio basta, porque
+        # ha' uma transferencia por vez e ela e' curta.
+        identificador = f"{int(time.time() * 1000):x}"
+        log.info("enviando %d arquivo(s), %.1f MB", len(lista), total / 1e6)
+        # `closing` porque `mensagens` e' um generator que mantem o arquivo de
+        # origem ABERTO entre dois blocos. Sair do laco no meio -- e' o que o
+        # `parar` faz -- deixaria o handle pendurado ate' o coletor passar, e
+        # enquanto isso ninguem consegue mover nem apagar o arquivo do usuario.
+        with contextlib.closing(
+                arquivos.mensagens(lista, total, identificador)) as fluxo:
+            for mensagem in fluxo:
+                if self.parar.is_set():
+                    self.enviar({"t": "arq", "e": "aborta", "id": identificador,
+                                 "motivo": "o programa esta' encerrando"})
+                    return
+                self.enviar(mensagem)
+        log.info("clipboard enviado (arquivos)")
+
     def run(self) -> None:
         self._sequencia = wcb.GetClipboardSequenceNumber()
         while not self.parar.wait(INTERVALO):
@@ -228,6 +286,9 @@ class Sincronizador(threading.Thread):
                     if msg is None or marca == self._ultima:
                         continue
                     self._ultima = marca
+                if msg["fmt"] == "arquivos":
+                    self._enviar_arquivos(msg["caminhos"])
+                    continue
                 self.enviar(msg)
                 log.info("clipboard enviado (%s)", msg["fmt"])
             except Exception:
