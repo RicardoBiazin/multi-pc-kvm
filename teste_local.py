@@ -25,6 +25,7 @@ import borda
 import cliente
 import clipboard_win as cw
 import configuracao as conf
+import diagnostico
 import entrada_win as ew
 import layout as lay
 import tema as tm
@@ -297,6 +298,56 @@ def teste_renomeacao_e_tema() -> None:
     checar("preferencia explicita manda", tm.resolver(tm.ESCURO) == tm.ESCURO)
     checar("'sistema' resolve para uma paleta de verdade",
            tm.resolver(tm.SISTEMA) in (tm.CLARO, tm.ESCURO))
+
+
+def teste_regra_de_firewall() -> None:
+    """Regressao: a regra ficava valendo para nada e o painel dizia que existia.
+
+    Ate' a v1.3 a regra era "qualquer programa, perfis privado e de dominio". O
+    cabo direto entre dois PCs quase sempre entra como "Rede nao identificada",
+    que o Windows trata como PUBLICA -- e naquele perfil a regra existe, aparece
+    no painel e nao vale para nada. O que segurava a conexao de pe' era outra
+    regra, criada pelo aviso do Windows e presa ao caminho do executavel; ao
+    renomear o programa ela deixou de casar, e a conexao caiu com timeout, sem
+    uma linha dizendo que era o firewall.
+
+    Nao mexe no firewall: intercepta a chamada ao netsh e confere os argumentos.
+    """
+    print("regra de firewall")
+    chamadas: list[tuple] = []
+    netsh_real, frozen_real = diagnostico._netsh, getattr(sys, "frozen", False)
+    diagnostico._netsh = lambda *a: (chamadas.append(a), (0, ""))[1]
+    try:
+        # -- empacotado: presa ao executavel, todos os perfis
+        sys.frozen = True
+        chamadas.clear()
+        ok, texto = diagnostico.liberar(24810, 24811)
+        adicoes = [a for a in chamadas if a[0] == "add"]
+        checar("liberou", ok, texto)
+        checar("criou as duas regras (TCP e UDP)", len(adicoes) == 2)
+        checar("presa ao executavel",
+               all(any(p.startswith("program=") for p in a) for a in adicoes))
+        checar("vale em todos os perfis",
+               all("profile=any" in a for a in adicoes))
+        checar("e as regras do nome antigo sao removidas",
+               all(any(f"name={n}" in a for a in chamadas if a[0] == "delete")
+                   for n in diagnostico.REGRAS_ANTIGAS))
+
+        # -- do codigo-fonte: nao pode prender no python.exe nem abrir publico
+        del sys.frozen
+        chamadas.clear()
+        diagnostico.liberar(24810, 24811)
+        adicoes = [a for a in chamadas if a[0] == "add"]
+        checar("do fonte, NAO prende regra em programa nenhum",
+               not any(p.startswith("program=") for a in adicoes for p in a))
+        checar("do fonte, nao abre em rede publica",
+               all("profile=private,domain" in a for a in adicoes))
+    finally:
+        diagnostico._netsh = netsh_real
+        if frozen_real:
+            sys.frozen = frozen_real
+        elif hasattr(sys, "frozen"):
+            del sys.frozen
 
 
 def teste_vigia_do_teclado() -> None:
@@ -904,6 +955,7 @@ def main() -> int:
     teste_shift_direito()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
+    teste_regra_de_firewall()
     teste_vigia_do_teclado()
     teste_raw_input_apos_religar()
     teste_hooks()
