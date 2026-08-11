@@ -21,6 +21,7 @@ import time
 from PIL import Image
 
 import alvo as alv
+import arquivos
 import borda
 import cliente
 import clipboard_win as cw
@@ -298,6 +299,102 @@ def teste_renomeacao_e_tema() -> None:
     checar("preferencia explicita manda", tm.resolver(tm.ESCURO) == tm.ESCURO)
     checar("'sistema' resolve para uma paleta de verdade",
            tm.resolver(tm.SISTEMA) in (tm.CLARO, tm.ESCURO))
+
+
+def _da_para_renomear(caminho: pathlib.Path) -> bool:
+    """No Windows, renomear falha enquanto alguem mantem o arquivo aberto."""
+    provisorio = caminho.with_suffix(caminho.suffix + ".livre")
+    try:
+        caminho.rename(provisorio)
+        provisorio.rename(caminho)
+        return True
+    except OSError:
+        return False
+
+
+def teste_transferencia_de_arquivos() -> None:
+    """Copiar arquivo num PC e colar no outro.
+
+    O clipboard do Windows guarda CAMINHOS (CF_HDROP), nao arquivos; mandar a
+    lista pela rede nao serviria de nada do outro lado. O conteudo vai em blocos,
+    e o que este teste protege e' a remontagem: um arquivo maior que um bloco tem
+    de chegar byte a byte igual, na ordem certa e sem pedaco perdido.
+    """
+    print("transferencia de arquivos pelo clipboard")
+    import hashlib
+    import os
+    import tempfile
+
+    bloco_real = arquivos.BLOCO
+    appdata_real = os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory() as base:
+        try:
+            # Pasta de recebidos isolada, e bloco pequeno para varios blocos sem
+            # gastar segundos gerando megabytes.
+            os.environ["APPDATA"] = base
+            arquivos.BLOCO = 64 * 1024
+
+            origem = pathlib.Path(base) / "origem"
+            origem.mkdir()
+            pequeno = origem / "plano.txt"
+            pequeno.write_text("acento: cao, agua\n", encoding="utf-8")
+            grande = origem / "com espaco.bin"
+            grande.write_bytes(os.urandom(200 * 1024))  # ~4 blocos
+            sha = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in (pequeno, grande)}
+
+            pronto = arquivos.preparar([str(pequeno), str(grande)])
+            checar("aceita a selecao de dois arquivos", pronto is not None)
+            lista, total = pronto
+
+            recepcao = arquivos.Recepcao()
+            prontos, blocos = None, 0
+            for msg in arquivos.mensagens(lista, total, "teste1"):
+                blocos += msg["e"] == "bloco"
+                resultado = recepcao.aplicar(msg)
+                if resultado:
+                    prontos = resultado
+            checar("foi em varios blocos", blocos >= 4, f"{blocos} blocos")
+            checar("a transferencia completou", prontos is not None)
+            checar("chegaram os dois arquivos", len(prontos or []) == 2)
+            checar("conteudo identico byte a byte",
+                   all(hashlib.sha256(c.read_bytes()).hexdigest() == sha[c.name]
+                       for c in prontos or []))
+
+            # Sem isto, colar de um lado devolveria tudo para o outro, para
+            # sempre: os recebidos ficam no clipboard e o poller os veria.
+            checar("nao devolve o que acabou de chegar",
+                   arquivos.preparar([str(c) for c in prontos]) is None)
+            checar("recusa pasta", arquivos.preparar([str(origem)]) is None)
+
+            # O nome vem pela rede. Cifra e autenticacao protegem contra
+            # estranho, nao contra bug do outro lado.
+            checar("nome com ..\\ nao escapa da pasta",
+                   arquivos._nome_seguro(r"..\..\Windows\algo.exe") == "algo.exe")
+            checar("nome vazio ainda gera algo gravavel",
+                   bool(arquivos._nome_seguro("")))
+
+            # Transferencia interrompida nao pode deixar arquivo pela metade
+            # passando por completo.
+            r2 = arquivos.Recepcao()
+            gerador = arquivos.mensagens(lista, total, "teste2")
+            r2.aplicar(next(gerador))          # inicio
+            r2.aplicar(next(gerador))          # um bloco
+            r2.aplicar({"t": "arq", "e": "aborta", "id": "teste2", "motivo": "x"})
+            checar("abortar limpa a pasta da transferencia",
+                   r2.destino is None or not r2.destino.exists())
+            # Abandonar o generator no meio deixa o arquivo de ORIGEM aberto, e
+            # ninguem consegue mover nem apagar o arquivo do usuario enquanto
+            # isso. Quem envia usa contextlib.closing por este motivo.
+            gerador.close()
+            checar("fechar o fluxo libera o arquivo de origem",
+                   _da_para_renomear(grande), str(grande))
+        finally:
+            arquivos.BLOCO = bloco_real
+            if appdata_real is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = appdata_real
 
 
 def teste_regra_de_firewall() -> None:
@@ -955,6 +1052,7 @@ def main() -> int:
     teste_shift_direito()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
+    teste_transferencia_de_arquivos()
     teste_regra_de_firewall()
     teste_vigia_do_teclado()
     teste_raw_input_apos_religar()

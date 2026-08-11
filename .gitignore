@@ -1,6 +1,10 @@
 # Artefatos de compilacao (o .exe vai como Release, nao no historico)
 build/
 dist/
+# `dist-novo` e' onde o empacotador escreve quando o .exe de `dist` esta' em uso
+# (o programa aberto o trava). Sem esta linha um `git add -A` leva 35 MB de
+# binario para o historico -- e num repositorio publico isso nao sai mais.
+dist-novo/
 *.spec
 icone.ico
 versao.txt
