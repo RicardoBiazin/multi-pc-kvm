@@ -15,6 +15,7 @@ import ctypes
 import logging
 import socket
 import subprocess
+import sys
 from ctypes import wintypes
 
 import redes
@@ -28,7 +29,15 @@ REGRA_UDP = f"{conf.APP} (busca na rede UDP)"
 # Regras criadas ate' a v1.2, quando o programa se chamava outro nome. Ficam
 # listadas para o relatorio poder avisar que sobraram no firewall: elas nao
 # atrapalham (apontam para o mesmo executavel), mas confundem quem for auditar.
-REGRAS_ANTIGAS = ("2pc_1Kit (TCP)", "2pc_1Kit (busca na rede UDP)")
+REGRAS_ANTIGAS = (
+    "2pc_1Kit (TCP)", "2pc_1Kit (busca na rede UDP)",
+    # Esta nao foi criada por nos: e' a que o Windows cria quando pergunta
+    # "permitir este programa?". Ela ficava presa ao caminho do executavel
+    # anterior, e era ELA que sustentava a conexao em rede publica -- ao renomear
+    # o programa, deixou de casar com qualquer arquivo e a conexao caiu. Sai
+    # junto porque aponta para um .exe que nao existe mais.
+    "2pc_1kit",
+)
 
 
 def testar(ip: str, porta: int, prazo: float = 3.0) -> tuple[bool, str]:
@@ -189,22 +198,58 @@ def redes_publicas() -> list[str]:
 
 
 def regras_existem() -> bool:
-    codigo, _ = _netsh("show", "rule", f"name={REGRA_TCP}")
-    return codigo == 0
+    """True so' se a regra existe E aponta para o executavel de agora.
+
+    Conferir o nome nao basta: uma regra criada para o executavel anterior
+    continua existindo e aparecendo no painel depois de uma renomeacao ou de
+    mover a pasta -- e nao vale mais para nada. Foi assim que a conexao entre os
+    dois PCs quebrou na v1.3, sem nenhum aviso: o painel dizia que estava
+    liberado. `verbose` e' o que traz a linha do programa na saida.
+    """
+    codigo, saida = _netsh("show", "rule", f"name={REGRA_TCP}", "verbose")
+    if codigo != 0:
+        return False
+    exe = f"{conf.APP_ARQUIVO}.exe".lower()
+    return exe in saida.lower()
 
 
 def liberar(porta_tcp: int, porta_udp: int) -> tuple[bool, str]:
-    """Cria as regras de entrada. Precisa de Administrador -- o .exe ja' roda assim."""
-    for nome in (REGRA_TCP, REGRA_UDP):
-        _netsh("delete", "rule", f"name={nome}")  # evita duplicar a cada clique
+    """Cria as regras de entrada. Precisa de Administrador -- o .exe ja' roda assim.
+
+    As regras sao presas ao EXECUTAVEL e valem em TODOS os perfis de rede.
+    Ate' a v1.3 eram o contrario -- qualquer programa, so' nos perfis privado e
+    de dominio -- e isso falhava calado no caso mais comum deste programa: o
+    cabo direto entre dois PCs quase sempre entra como "Rede nao identificada",
+    que o Windows classifica como PUBLICA. Nesse perfil a regra existe, aparece
+    no painel e nao vale para nada; o sintoma e' timeout na conexao, sem uma
+    linha dizendo que foi o firewall.
+
+    A troca aperta um eixo e afrouxa outro. Aperta: so' este executavel passa,
+    em vez de qualquer programa que ocupe a porta. Afrouxa: passa a valer em rede
+    publica tambem. O que sustenta isso e' o resto do desenho -- o servidor
+    escuta apenas no IP configurado, nao em 0.0.0.0, e o handshake exige a chave
+    compartilhada. Sem a chave, alcancar a porta nao leva a nada.
+    """
+    # Rodando do codigo-fonte nao existe executavel para prender a regra: o
+    # `sys.executable` seria o python.exe, e liberar o python inteiro em rede
+    # publica seria pior que o problema. Nesse caso ficamos na regra antiga --
+    # por porta, so' nos perfis privado e de dominio -- e o texto de retorno diz
+    # que foi isso, para ninguem concluir que esta' igual ao .exe.
+    exe = sys.executable if getattr(sys, "frozen", False) else ""
+    # As antigas saem junto: ficaram sem efeito quando o programa foi renomeado
+    # (apontavam para o executavel anterior) e so' confundem quem audita.
+    for nome in (REGRA_TCP, REGRA_UDP, *REGRAS_ANTIGAS):
+        _netsh("delete", "rule", f"name={nome}")
 
     erros = []
     for nome, protocolo, porta in ((REGRA_TCP, "TCP", porta_tcp),
                                    (REGRA_UDP, "UDP", porta_udp)):
-        codigo, saida = _netsh(
-            "add", "rule", f"name={nome}", "dir=in", "action=allow",
-            f"protocol={protocolo}", f"localport={porta}",
-            "profile=private,domain")
+        argumentos = ["add", "rule", f"name={nome}", "dir=in", "action=allow",
+                      f"protocol={protocolo}", f"localport={porta}",
+                      "enable=yes"]
+        argumentos += ([f"program={exe}", "profile=any"] if exe
+                       else ["profile=private,domain"])
+        codigo, saida = _netsh(*argumentos)
         if codigo != 0:
             erros.append(f"{protocolo}/{porta}: {saida.strip()[:120]}")
 
@@ -215,11 +260,17 @@ def liberar(porta_tcp: int, porta_udp: int) -> tuple[bool, str]:
     aviso = ""
     publicas = redes_publicas()
     if publicas:
-        aviso = (f" ATENCAO: a rede '{publicas[0]}' esta' marcada como Publica, "
-                 f"e nesse modo o Windows bloqueia mesmo com a regra criada. "
-                 f"Mude para Rede particular em Configuracoes > Rede.")
-    return True, (f"liberados TCP {porta_tcp} e UDP {porta_udp} para as redes "
-                  f"privada e de dominio.{aviso}")
+        # Nao e' mais impedimento para a conexao, mas continua valendo dizer: em
+        # rede publica o Windows desliga a descoberta de rede, e o usuario perde
+        # a lista automatica de PCs (o IP digitado a mao segue funcionando).
+        aviso = (f" A rede '{publicas[0]}' esta' marcada como Publica: a conexao "
+                 f"funciona, mas a busca automatica de PCs nao. Para te-la, mude "
+                 f"para Rede particular em Configuracoes > Rede.")
+    alcance = (f"para {conf.APP_ARQUIVO}.exe, em todos os perfis de rede" if exe
+               else "para as redes privada e de dominio (rodando do codigo-fonte, "
+                    "sem executavel para prender a regra)")
+    return True, (f"liberados TCP {porta_tcp} e UDP {porta_udp} "
+                  f"{alcance}.{aviso}")
 
 
 def resumo_das_placas() -> str:
