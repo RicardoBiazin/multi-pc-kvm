@@ -69,6 +69,37 @@ WM_APP = 0x8000
 MSG_REINSTALAR = WM_APP + 1  # pedido de reinstalacao para a thread dos hooks
 INTERVALO_VIGIA = 2.0    # s entre verificacoes do vigia
 TOLERANCIA_VIGIA = 3.0   # s de atraso do hook em relacao ao Raw Input
+# Renovacao INCONDICIONAL dos dois ganchos, de tempo em tempo.
+#
+# A deteccao acima so' enxerga a morte do gancho do MOUSE: ela compara o Raw
+# Input com `_visto_hook`, e quem marca `_visto_hook` e' so' o callback do mouse.
+# Se o Windows derrubar apenas o do TECLADO -- basta um callback passar de ~300
+# ms, e o RDP torna isso facil --, o mouse continua marcando, o atraso fica em
+# zero, o vigia nunca dispara: o teclado morre em silencio e nao volta ate'
+# reiniciar o programa. Era o sintoma "o mouse atravessa mas o teclado nao".
+#
+# Nao ha' deteccao possivel para o teclado: silencio dele nao prova nada, pode
+# ser so' ninguem digitando. Renovar periodicamente e' o que fecha o buraco.
+# `_instalar_hooks` instala os novos antes de soltar os antigos, entao a troca
+# nao abre janela sem cobertura, e o custo e' irrelevante nesta frequencia.
+INTERVALO_RENOVACAO = 60.0  # s
+# Enquanto ESTE PC comanda outro, a renovacao fica bem mais curta.
+#
+# Ganchos de baixo nivel sao chamados em ordem INVERSA de instalacao: o mais
+# recente primeiro. Quem instalar depois de nos passa na frente e pode consumir a
+# tecla antes -- e' o que o cliente de Area de Trabalho Remota faz em tela cheia,
+# para mandar o teclado a' sessao remota. O 2pc_1Kit sobe antes, o `mstsc` sobe
+# depois, e o teclado para de atravessar enquanto o mouse continua indo (o mouse
+# vem pelo Raw Input, que nao entra nessa fila).
+#
+# Reinstalar devolve o primeiro lugar. Nao ha' como vencer em definitivo -- os
+# dois lados podem reinstalar, e ganha quem fez por ultimo --, mas a alguns
+# segundos o buraco deixa de ser perceptivel. So' vale a pena enquanto estamos
+# comandando: em casa, o teclado e' para funcionar aqui mesmo.
+#
+# O laco do vigia roda a cada INTERVALO_VIGIA, entao esse e' o piso real: nao
+# adianta pedir menos do que ele.
+INTERVALO_DISPUTA = INTERVALO_VIGIA
 
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_ESCAPE = 0x10, 0x11, 0x12, 0x1B
 VK_LWIN, VK_RWIN = 0x5B, 0x5C
@@ -453,7 +484,16 @@ class Captura(threading.Thread):
         # passa de ~300 ms, sem devolver erro nenhum.
         self._visto_raw = 0.0
         self._visto_hook = 0.0
+        # Marcado pelo gancho do TECLADO. Nao serve para detectar morte (ver
+        # INTERVALO_RENOVACAO), mas diz no log ha' quanto tempo ele nao e'
+        # chamado -- que e' a informacao que faltava para diagnosticar isso.
+        self._visto_teclado = 0.0
         self.reinstalacoes = 0
+        self._motivo_reinstalacao = ""
+        self._avisar_reinstalacao = False
+        # O dono liga aqui: True enquanto ESTE PC comanda outro. Ver
+        # INTERVALO_DISPUTA. Sem ninguem ligar, o comportamento nao muda.
+        self.em_disputa = lambda: False
 
     # -- callbacks (executam na thread do hook, tem de ser rapidos) ---------
 
@@ -493,6 +533,9 @@ class Captura(threading.Thread):
     def _teclado(self, ncode, wparam, lparam):
         if ncode != 0:
             return user32.CallNextHookEx(None, ncode, wparam, lparam)
+        # Marca ANTES do filtro da MARCA: o que interessa aqui e' que o gancho
+        # foi chamado, mesmo que o evento seja nosso e va' ser ignorado adiante.
+        self._visto_teclado = time.monotonic()
         dados = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
         if dados.dwExtraInfo == MARCA:
             return user32.CallNextHookEx(None, ncode, wparam, lparam)
@@ -591,20 +634,55 @@ class Captura(threading.Thread):
             user32.PostThreadMessageW(self._id_thread, 0x0012, 0, 0)  # WM_QUIT
             self.join(timeout=3)
 
+    def _decidir(self, agora: float, renovado_em: float) -> tuple[str, bool] | None:
+        """(motivo, avisar) se e' hora de reinstalar; None se esta' tudo bem.
+
+        Separado do laco para poder ser testado sem thread nem espera real.
+        """
+        atraso = self._visto_raw - self._visto_hook
+        if self._visto_raw and atraso > TOLERANCIA_VIGIA:
+            # Este e' o caso ANORMAL: o Raw Input recebe movimento e o gancho do
+            # mouse nao. Merece aviso no log.
+            return f"o gancho do mouse esta' {atraso:.1f}s atras do Raw Input", True
+        try:
+            disputando = bool(self.em_disputa())
+        except Exception:
+            disputando = False
+        intervalo = INTERVALO_DISPUTA if disputando else INTERVALO_RENOVACAO
+        if agora - renovado_em >= intervalo:
+            # Rotina: nao ha' nada de errado detectado, e e' justamente por isso
+            # que ela existe -- nem a morte do gancho do teclado nem a perda do
+            # primeiro lugar na fila sao detectaveis daqui.
+            return ("renovacao rapida (comandando)" if disputando
+                    else "renovacao periodica"), False
+        return None
+
     def _vigiar(self) -> None:
-        """Reinstala os hooks se o Windows os tiver descartado em silencio."""
+        """Mantem os dois ganchos vivos: por deteccao e por renovacao periodica."""
         pausa = threading.Event()
+        renovado_em = time.monotonic()
         while not pausa.wait(INTERVALO_VIGIA):
             if not self._hooks:
                 return
-            atraso = self._visto_raw - self._visto_hook
-            if self._visto_raw and atraso > TOLERANCIA_VIGIA:
-                self.reinstalacoes += 1
-                log.warning("os hooks pararam de receber eventos (%.1fs de "
-                            "atraso): reinstalando (%da vez)",
-                            atraso, self.reinstalacoes)
+            agora = time.monotonic()
+            decisao = self._decidir(agora, renovado_em)
+            if decisao is None:
+                continue
+            motivo, avisar = decisao
+            if avisar:
+                # Zera a divergencia para nao repetir o aviso a cada 2 s enquanto
+                # a reinstalacao nao surtir efeito.
                 self._visto_hook = self._visto_raw
-                user32.PostThreadMessageW(self._id_thread, MSG_REINSTALAR, 0, 0)
+            self.reinstalacoes += 1
+            self._motivo_reinstalacao = motivo
+            self._avisar_reinstalacao = avisar
+            renovado_em = agora
+            # Reinstalar tem de ser na thread dos hooks: e' dela que eles sao.
+            user32.PostThreadMessageW(self._id_thread, MSG_REINSTALAR, 0, 0)
+
+    @staticmethod
+    def _idade(marca: float) -> str:
+        return "nunca" if not marca else f"{time.monotonic() - marca:.0f}s"
 
     def _instalar_hooks(self) -> bool:
         # hMod tem de ser NULL nos hooks de baixo nivel: o callback vive num
@@ -644,7 +722,15 @@ class Captura(threading.Thread):
                 # Reinstalar tem de acontecer nesta thread: e' dela que os hooks
                 # sao, e e' ela que roda o message loop.
                 if self._instalar_hooks():
-                    log.info("hooks reinstalados")
+                    # A idade dos dois ganchos vai no log de proposito: e' o que
+                    # permite ver, depois do fato, que o teclado estava morto
+                    # enquanto o mouse seguia atendendo.
+                    registrar = (log.warning if self._avisar_reinstalacao
+                                 else log.debug)
+                    registrar("ganchos reinstalados (%s; %da vez) -- mouse visto "
+                              "ha' %s, teclado ha' %s", self._motivo_reinstalacao,
+                              self.reinstalacoes, self._idade(self._visto_hook),
+                              self._idade(self._visto_teclado))
                 continue
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
