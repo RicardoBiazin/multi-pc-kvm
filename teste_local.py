@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import inspect
 import io
 import sys
 import time
@@ -38,6 +39,7 @@ def cliente_falso(enviados: list, injetado: list) -> "cliente.Cliente":
         "mover_para": lambda s, x, y: injetado.append((x, y)),
         "soltar_modificadores": lambda s: None})()
     cli.remoto = cli.aguardando = False
+    cli._esperando_desde = 0.0
     cli.conectado = True
     cli.ao_mudar = lambda: None
     cli.ao_trocar = lambda de, para: None
@@ -186,6 +188,120 @@ def teste_shift_direito() -> None:
            bool(flags(0xA5, 0x38, True) & ew.KEYEVENTF_EXTENDEDKEY))
     checar("Shift esquerdo segue sem estendida",
            not flags(0xA0, 0x2A, False) & ew.KEYEVENTF_EXTENDEDKEY)
+
+
+def teste_espera_do_sair() -> None:
+    """Regressao: o cliente podia ficar esperando para sempre a resposta do 'sair'.
+
+    Ao sair por uma aresta o cliente para de injetar e so' volta com 'entrar' ou
+    'soltar'. Se nenhum dos dois chega, todo movimento e' descartado dali em
+    diante, em silencio: mouse parado, teclado funcionando -- porque o teclado
+    nao passa por este estado.
+
+    Sao duas defesas independentes, e o teste cobre as duas:
+      1. o SERVIDOR passa a responder 'soltar' mesmo quando ignora o aviso;
+      2. o CLIENTE desiste depois de ESPERA_MAXIMA e volta a injetar.
+    """
+    print("espera da resposta ao 'sair'")
+
+    # -- 1. o servidor nao pode ignorar em silencio --------------------------
+    enviados: list[tuple[str, dict]] = []
+    ctl = borda.Controle(_layout_de_teste(), "B",
+                         lambda destino, msg: enviados.append((destino, msg)))
+    ctl.conectados.update({"A", "C"})
+    ctl.atual = "C"  # o cursor esta' em C...
+    ctl.saiu_do_cliente("A", "direita", 0.5)  # ...e quem avisa saida e' A
+    checar("aviso de quem nao tem o cursor e' respondido com soltar",
+           enviados == [("A", {"t": "soltar"})], str(enviados))
+    checar("e o cursor nao se mexe por causa disso", ctl.atual == "C")
+
+    # -- 2. o cliente desiste sozinho ----------------------------------------
+    mandados: list[dict] = []
+    injetado: list[tuple] = []
+    cli = cliente_falso([], injetado)
+    conn = type("C", (), {"enviar": lambda s, m: mandados.append(m)})()
+    cli.remoto = True
+    cli.alvo.entrar("direita", 0.5)
+
+    # Empurra para fora da aresta esquerda ate' o cliente avisar a saida.
+    for _ in range(3):
+        cli._aplicar(conn, None, {"t": "mv", "dx": -3000, "dy": 0})
+    checar("saida avisada ao servidor",
+           any(m.get("t") == "sair" for m in mandados), str(mandados))
+    checar("e o cliente passou a esperar", cli.aguardando)
+
+    injetado.clear()
+    cli._aplicar(conn, None, {"t": "mv", "dx": 10, "dy": 0})
+    checar("enquanto espera, o movimento e' descartado", injetado == [])
+
+    # Sem dormir 5s: envelhece o relogio da espera.
+    cli._esperando_desde -= cliente.ESPERA_MAXIMA + 0.1
+    cli._aplicar(conn, None, {"t": "mv", "dx": 10, "dy": 0})
+    checar("passado o prazo, volta a injetar", injetado != [], str(injetado))
+    checar("e sai do estado de espera", not cli.aguardando)
+
+
+def teste_vigia_do_teclado() -> None:
+    """Regressao: o gancho do teclado morria e ninguem percebia.
+
+    O vigia compara o Raw Input com `_visto_hook`, e quem marca `_visto_hook` e'
+    so' o callback do MOUSE. Derrubado apenas o gancho do teclado -- basta um
+    callback passar de ~300 ms, e o RDP torna isso facil --, o mouse seguia
+    marcando, o atraso ficava em zero e o vigia nunca disparava: o mouse
+    atravessava e o teclado nao, ate' reiniciar o programa.
+
+    Testa a decisao (`_decidir`), nao o laco: sem thread e sem espera real.
+    """
+    print("vigia mantem o gancho do teclado vivo")
+    cap = ew.Captura.__new__(ew.Captura)  # sem __init__: nada aqui instala hook
+    cap._visto_raw = cap._visto_hook = cap._visto_teclado = 0.0
+
+    agora = 1000.0
+    checar("tudo em silencio e' normal (ninguem mexendo)",
+           cap._decidir(agora, agora) is None)
+
+    # Mouse saudavel: Raw Input e gancho do mouse em dia. Antes, isto bastava
+    # para o vigia nunca mais reinstalar -- e o teclado ficava morto para sempre.
+    cap._visto_raw = cap._visto_hook = agora
+    checar("mouse saudavel nao dispara aviso",
+           cap._decidir(agora, agora) is None)
+    decisao = cap._decidir(agora + ew.INTERVALO_RENOVACAO, agora)
+    checar("mas passa a renovar por tempo, mesmo sem defeito detectado",
+           decisao is not None and decisao[0] == "renovacao periodica")
+    checar("e a renovacao de rotina nao vira aviso no log",
+           decisao is not None and decisao[1] is False)
+
+    # Gancho do mouse atrasado em relacao ao Raw Input: o caso anormal.
+    cap._visto_hook = agora - (ew.TOLERANCIA_VIGIA + 1)
+    cap._visto_raw = agora
+    decisao = cap._decidir(agora, agora)
+    checar("mouse atras do Raw Input dispara reinstalacao",
+           decisao is not None and "gancho do mouse" in decisao[0])
+    checar("e essa vai como aviso", decisao is not None and decisao[1] is True)
+
+    # Comandando outro PC: a renovacao tem de ficar curta, senao um programa
+    # aberto depois (o cliente de Area de Trabalho Remota em tela cheia) fica na
+    # frente na fila dos ganchos e o teclado para de atravessar ate' a proxima
+    # renovacao -- que, no intervalo longo, e' um minuto inteiro.
+    cap._visto_raw = cap._visto_hook = agora
+    cap.em_disputa = lambda: True
+    decisao = cap._decidir(agora + ew.INTERVALO_DISPUTA, agora)
+    checar("comandando, renova em segundos e nao em um minuto",
+           decisao is not None and "rapida" in decisao[0])
+    cap.em_disputa = lambda: False
+    checar("em casa, volta ao intervalo longo",
+           cap._decidir(agora + ew.INTERVALO_DISPUTA, agora) is None)
+    cap.em_disputa = lambda: 1 / 0  # dono com defeito nao pode derrubar o vigia
+    checar("erro no sinal do dono nao quebra a decisao",
+           cap._decidir(agora + ew.INTERVALO_RENOVACAO, agora) is not None)
+    cap.em_disputa = lambda: False
+
+    # A marcacao do teclado tem de valer tambem para evento nosso (com MARCA),
+    # senao "ha' quanto tempo o gancho nao e' chamado" mede a coisa errada.
+    fonte = inspect.getsource(ew.Captura._teclado)
+    antes_da_marca = fonte.split("dwExtraInfo == MARCA")[0]
+    checar("o gancho do teclado marca antes do filtro da MARCA",
+           "_visto_teclado" in antes_da_marca)
 
 
 def teste_raw_input_apos_religar() -> None:
@@ -728,6 +844,8 @@ def main() -> int:
     teste_layout()
     teste_injecao()
     teste_shift_direito()
+    teste_espera_do_sair()
+    teste_vigia_do_teclado()
     teste_raw_input_apos_religar()
     teste_hooks()
     teste_roteamento()

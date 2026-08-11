@@ -256,7 +256,19 @@ class Controle:
     def saiu_do_cliente(self, origem: str, direcao: str, rel: float) -> None:
         """Um cliente avisou que o cursor passou de uma das arestas dele."""
         if self.atual != origem:
-            return  # aviso atrasado de quem ja' nao tem o cursor
+            # Aviso atrasado de quem ja' nao tem o cursor. Sair daqui em SILENCIO
+            # trava o cliente: ele para de injetar quando manda 'sair' e so'
+            # volta com um 'entrar' ou um 'soltar'. Se o soltar dele se perdeu no
+            # caminho de alguma transicao, ele fica esperando uma resposta que
+            # nunca vem -- de mouse morto e teclado funcionando, porque o teclado
+            # nao passa por este estado.
+            #
+            # Responder 'soltar' e' a verdade: quem tem o cursor e' outro. Custa
+            # uma mensagem e fecha o unico caminho conhecido de espera sem fim.
+            log.info("'%s' avisou saida mas o cursor esta' em '%s': mandando "
+                     "soltar", origem, self.atual)
+            self.enfileirar(origem, {"t": "soltar"})
+            return
         vizinho = self.layout.vizinho(origem, direcao)
         chegada = lay.OPOSTA[direcao]
 

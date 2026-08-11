@@ -36,6 +36,12 @@ ESPERA_APOS_RECUSA = 15.0  # o servidor recusou por configuracao: insistir nao a
 FILA_MAXIMA = 2000  # eventos pendentes antes de comecar a descartar movimento
 TRAVA_APOS_RETORNO = 0.4  # s ignorando a borda local, para nao reentrar em seguida
 INTERVALO_DO_PEDIDO = 0.5  # s entre dois 'assumir' -- o mouse fica encostado
+# Teto para a espera da resposta do servidor a um 'sair'. Generoso de proposito:
+# a conexao e' TCP, entao mensagem nao se perde -- ou chega, ou o socket cai e a
+# reconexao resolve. Este prazo existe para o servidor que trava ou morre sem
+# fechar o socket, e nao para latencia. Cortar cedo demais faria a travessia
+# falhar em rede lenta (ja' houve ida-e-volta de 6 s neste par de PCs).
+ESPERA_MAXIMA = 5.0  # s
 
 
 class Recusado(Exception):
@@ -60,6 +66,7 @@ class Cliente:
         # True entre mandar 'sair' e o servidor responder: nao adianta injetar
         # nem reavisar enquanto ele nao decide para onde o cursor vai.
         self.aguardando = False
+        self._esperando_desde = 0.0
         # Teclado e mouse ligados a ESTE PC. So' entra em acao se houver hooks;
         # num cliente sem periferico ele simplesmente nunca pede o comando.
         self.comando = ComandoLocal(self)
@@ -296,8 +303,10 @@ class Cliente:
             self._encerrar_remoto()
             return
 
-        if not self.remoto or self.aguardando:
-            return  # evento atrasado, ou a espera da decisao do servidor
+        if not self.remoto:
+            return  # evento atrasado
+        if self.aguardando and not self._desistiu_de_esperar():
+            return  # a espera da decisao do servidor sobre o nosso 'sair'
 
         if tipo == "mv":
             self.alvo.mover(msg["dx"], msg["dy"])
@@ -308,6 +317,7 @@ class Cliente:
                 # fica encostado e' o servidor, que responde com 'entrar' ou
                 # 'soltar'. Ate' la', so' paramos de injetar movimento.
                 self.aguardando = True
+                self._esperando_desde = time.monotonic()
                 conn.enviar({"t": "sair", "dir": direcao, "rel": rel})
                 log.info("cursor saiu pela %s; aguardando o servidor", direcao)
                 return
@@ -318,6 +328,25 @@ class Cliente:
             self.injetor.roda(msg["d"], msg["h"])
         elif tipo == "key":
             self.injetor.tecla(msg["vk"], msg["sc"], msg["ext"], msg["down"])
+
+    def _desistiu_de_esperar(self) -> bool:
+        """Passou de ESPERA_MAXIMA sem resposta ao 'sair': volta a injetar.
+
+        Sem isto a espera nao tem fim: `aguardando` so' e' desligado por 'entrar'
+        ou 'soltar'. Se nenhum dos dois chegar -- servidor travado, ou uma
+        transicao que o deixou sem responder --, todo movimento e' descartado
+        deste ponto em diante, em silencio, e o cursor fica parado onde estava.
+        O teclado continua, porque nao passa por aqui.
+
+        Voltar a injetar e' seguro: encostar de novo na aresta manda outro
+        'sair', e o servidor ignora aviso de quem ja' nao tem o cursor.
+        """
+        if time.monotonic() - self._esperando_desde < ESPERA_MAXIMA:
+            return False
+        log.warning("o servidor nao respondeu ao 'sair' em %.0fs; voltando a "
+                    "mover o cursor aqui", ESPERA_MAXIMA)
+        self.aguardando = False
+        return True
 
     def _encerrar_remoto(self) -> None:
         self.aguardando = False
@@ -363,6 +392,9 @@ class ComandoLocal:
                                       self.cliente.altura)
         self.ancora = (int(centro[0]), int(centro[1]))
         self.captura = ew.Captura(self.tratar, self.delta_bruto)
+        # Mesma disputa do lado servidor: enquanto ESTE PC comanda outro, as
+        # teclas tem de ser engolidas aqui. Ver INTERVALO_DISPUTA.
+        self.captura.em_disputa = lambda: self.comandando
         self.captura.start()
         if not self.captura.pronta.wait(5):
             log.warning("nao consegui instalar os hooks neste cliente: o teclado "

@@ -34,6 +34,11 @@ class Servidor:
         self.injetor = ew.Injetor()
         self.controle = borda.Controle(self.layout, self.eu, self._enfileirar)
         self.captura = ew.Captura(self.controle.tratar, self.controle.delta_bruto)
+        # Enquanto o cursor esta' em outro PC, as teclas tem de ser engolidas
+        # aqui -- e e' justamente ai' que um programa aberto depois (o cliente de
+        # Area de Trabalho Remota em tela cheia, por exemplo) pode ter passado a
+        # nossa frente na fila dos ganchos. Ver INTERVALO_DISPUTA.
+        self.captura.em_disputa = lambda: self.controle.remoto
         self.clientes: dict[str, protocolo.Conexao] = {}
         self.sinc: clipboard_win.Sincronizador | None = None
         self._lock = threading.Lock()
