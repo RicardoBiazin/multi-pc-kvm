@@ -19,7 +19,7 @@ import configuracao as conf
 import protocolo
 
 user32 = ctypes.WinDLL("user32")
-TEXTO = "2pc_1Kit ok - acentuacao: cao, agua, ninho"
+TEXTO = "Multi PC - KVM ok - acentuacao: cao, agua, ninho"
 PAUSA = 0.02
 
 

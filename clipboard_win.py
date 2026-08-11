@@ -1,4 +1,4 @@
-"""Area de transferencia do 2pc_1Kit: texto (CF_UNICODETEXT) e imagem (CF_DIB).
+"""Area de transferencia do Multi PC - KVM: texto (CF_UNICODETEXT) e imagem (CF_DIB).
 
 A deteccao de mudanca usa polling de GetClipboardSequenceNumber(), que e' bem
 mais simples que AddClipboardFormatListener (exigiria uma janela oculta com

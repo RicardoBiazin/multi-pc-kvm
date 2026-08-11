@@ -14,6 +14,7 @@ import base64
 import ctypes
 import inspect
 import io
+import pathlib
 import sys
 import time
 
@@ -23,8 +24,10 @@ import alvo as alv
 import borda
 import cliente
 import clipboard_win as cw
+import configuracao as conf
 import entrada_win as ew
 import layout as lay
+import tema as tm
 
 falhas: list[str] = []
 
@@ -241,6 +244,61 @@ def teste_espera_do_sair() -> None:
     checar("e sai do estado de espera", not cli.aguardando)
 
 
+def teste_renomeacao_e_tema() -> None:
+    """A renomeacao da v1.3 nao pode custar a configuracao de ninguem.
+
+    O programa passou de '2pc_1Kit' para 'Multi PC - KVM', e a pasta de dados
+    acompanhou. Sem migracao, atualizar equivaleria a apagar o config.json do
+    ponto de vista do usuario -- e dentro dele esta' a CHAVE COMPARTILHADA, cuja
+    perda faz o handshake falhar sem explicacao obvia nos dois PCs.
+    """
+    print("renomeacao (v1.3) e paletas de tema")
+    import os
+    import tempfile
+
+    checar("nome de arquivo nao tem espaco",
+           " " not in conf.APP_ARQUIVO, conf.APP_ARQUIVO)
+    checar("nome de exibicao e' o novo", conf.APP == "Multi PC - KVM", conf.APP)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        antigo_appdata = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = tmp
+        try:
+            antiga = pathlib.Path(tmp) / conf.APP_ANTIGO
+            antiga.mkdir(parents=True)
+            (antiga / "config.json").write_text(
+                '{"chave": "segredo-de-antes", "porta": 24810}', encoding="utf-8")
+
+            nova = conf.pasta_de_dados()
+            trazido = (nova / "config.json")
+            checar("a pasta nova nasce com o config antigo dentro",
+                   trazido.is_file())
+            checar("e a chave compartilhada sobrevive",
+                   "segredo-de-antes" in trazido.read_text(encoding="utf-8"))
+            checar("o config antigo NAO e' movido (volta atras continua possivel)",
+                   (antiga / "config.json").is_file())
+
+            # Segunda execucao: o que ja' existe manda, senao a migracao
+            # sobrescreveria alteracoes feitas depois de atualizar.
+            trazido.write_text('{"chave": "mudei-depois"}', encoding="utf-8")
+            conf.pasta_de_dados()
+            checar("execucao seguinte nao sobrescreve o que o usuario mudou",
+                   "mudei-depois" in trazido.read_text(encoding="utf-8"))
+        finally:
+            if antigo_appdata is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = antigo_appdata
+
+    # Paleta incompleta so' apareceria ao abrir a janela no tema errado.
+    faltando = set(tm.PALETAS[tm.CLARO]) ^ set(tm.PALETAS[tm.ESCURO])
+    checar("as duas paletas tem exatamente as mesmas cores", not faltando,
+           str(sorted(faltando)))
+    checar("preferencia explicita manda", tm.resolver(tm.ESCURO) == tm.ESCURO)
+    checar("'sistema' resolve para uma paleta de verdade",
+           tm.resolver(tm.SISTEMA) in (tm.CLARO, tm.ESCURO))
+
+
 def teste_vigia_do_teclado() -> None:
     """Regressao: o gancho do teclado morria e ninguem percebia.
 
@@ -307,7 +365,7 @@ def teste_vigia_do_teclado() -> None:
 def teste_raw_input_apos_religar() -> None:
     """Regressao: religar o servidor matava o mouse e deixava so' o teclado.
 
-    A classe de janela "2pc1KitRawInput" vale para o processo inteiro e guarda o
+    A classe de janela do Raw Input vale para o processo inteiro e guarda o
     WNDPROC de quem a registrou. Parar e iniciar de novo cria uma Captura nova,
     o RegisterClass falha com ERROR_CLASS_ALREADY_EXISTS -- que e' tolerado --
     e a janela nascia apontando para o WNDPROC da instancia MORTA. O WM_INPUT
@@ -845,6 +903,7 @@ def main() -> int:
     teste_injecao()
     teste_shift_direito()
     teste_espera_do_sair()
+    teste_renomeacao_e_tema()
     teste_vigia_do_teclado()
     teste_raw_input_apos_religar()
     teste_hooks()

@@ -27,6 +27,10 @@ log = logging.getLogger("descoberta")
 PORTA = 24811
 INTERVALO = 2.0    # s entre anuncios
 VALIDADE = 8.0     # s sem noticias e' considerado sumido
+# Marca do PROTOCOLO no anuncio UDP, nao nome de exibicao: e' o que faz um PC
+# reconhecer o outro. Mantida como estava na renomeacao da v1.3 de proposito --
+# trocar sem necessidade quebraria a descoberta entre versoes diferentes, e o
+# usuario nao ve' este texto em lugar nenhum.
 MARCA = "2pc_1Kit"
 
 

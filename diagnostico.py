@@ -21,8 +21,14 @@ import redes
 
 log = logging.getLogger("diagnostico")
 
-REGRA_TCP = "2pc_1Kit (TCP)"
-REGRA_UDP = "2pc_1Kit (busca na rede UDP)"
+import configuracao as conf
+
+REGRA_TCP = f"{conf.APP} (TCP)"
+REGRA_UDP = f"{conf.APP} (busca na rede UDP)"
+# Regras criadas ate' a v1.2, quando o programa se chamava outro nome. Ficam
+# listadas para o relatorio poder avisar que sobraram no firewall: elas nao
+# atrapalham (apontam para o mesmo executavel), mas confundem quem for auditar.
+REGRAS_ANTIGAS = ("2pc_1Kit (TCP)", "2pc_1Kit (busca na rede UDP)")
 
 
 def testar(ip: str, porta: int, prazo: float = 3.0) -> tuple[bool, str]:
