@@ -34,7 +34,7 @@ def criar(ao_abrir, ao_sair, motor):
         return None
 
     import configuracao as conf
-    icone = pystray.Icon(conf.APP, _imagem(CINZA), f"{conf.APP} v{conf.VERSAO}")
+    icone = pystray.Icon(conf.APP, _imagem(CINZA), f"{conf.APP} v{conf.VERSAO}\npor {conf.AUTOR}")
     icone.menu = pystray.Menu(
         pystray.MenuItem("Abrir", lambda: ao_abrir(), default=True),
         pystray.MenuItem(lambda _i: motor.resumo(), None, enabled=False),

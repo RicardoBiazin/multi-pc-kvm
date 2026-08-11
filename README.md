@@ -1,8 +1,12 @@
-# 2pc_1Kit
+# Multi PC - KVM
 
 Um teclado e um mouse para vários PCs Windows na mesma rede. O ponteiro
 atravessa a borda do monitor e passa a controlar o PC do lado; a área de
 transferência (texto e imagens) fica compartilhada entre todos.
+
+> **Chamava-se `2pc_1Kit` até a v1.2.** Ao atualizar, a configuração gravada em
+> `%APPDATA%\2pc_1Kit\` é copiada sozinha para a pasta nova — inclusive a chave
+> compartilhada, sem a qual os PCs não se reconhecem. Nada a fazer à mão.
 
 Python puro sobre a API do Windows (`ctypes`), sem dependência de framework:
 `pywin32`, `cryptography` e `pillow` para clipboard e cifra, `tkinter` para a
@@ -12,6 +16,13 @@ janela. Licença MIT.
 |---|---|
 | **Ctrl+Alt+1…9** | leva teclado e mouse direto para o N-ésimo PC da lista |
 | **Ctrl+Alt+Shift+Esc** | pânico: devolve tudo ao PC onde foi apertado |
+
+## Tema claro e escuro
+
+A janela abre no tema do Windows e tem um botão no rodapé para alternar. A
+escolha fica gravada no `config.json`, no campo `tema`: `sistema` (padrão)
+segue o Windows, `claro` e `escuro` mandam nele. Para voltar a seguir o
+sistema, apague esse campo.
 
 ## Os dois PCs têm teclado e mouse?
 
@@ -33,13 +44,13 @@ pede o comando.
 
 ## Instalação
 
-Baixe o `2pc_1Kit.exe` em [Releases](../../releases), ou compile do código com
+Baixe o `MultiPC-KVM.exe` em [Releases](../../releases), ou compile do código com
 `python empacotar.py`.
 
 O mesmo `.exe` serve para todos os PCs — quem é servidor e quem é cliente sai do
 layout que você monta na janela.
 
-1. Copie o `2pc_1Kit.exe` para cada PC e **abra em todos** (ele pede
+1. Copie o `MultiPC-KVM.exe` para cada PC e **abra em todos** (ele pede
    Administrador). Enquanto o programa está aberto ele se anuncia na rede, então
    deixe todos abertos enquanto configura.
 2. Clique em **Liberar no Firewall** nos dois PCs (cria as regras de entrada
@@ -117,7 +128,7 @@ Hyper-V) e endereços `169.254.x.x` são ignorados.
 O botão **Testar conexão** tenta um TCP no PC selecionado e diz o que houve:
 outra sub-rede, Firewall barrando, ninguém ouvindo naquela porta, ou tudo certo.
 
-A configuração fica em `%APPDATA%\2pc_1Kit\config.json`. Se você puser um
+A configuração fica em `%APPDATA%\MultiPC-KVM\config.json`. Se você puser um
 `config.json` ao lado do `.exe`, ele ganha — é o jeito de levar a configuração
 pronta num pendrive (lembre de trocar o `este_pc` em cada máquina).
 
@@ -143,7 +154,7 @@ antes de deixar iniciar.
 python empacotar.py
 ```
 
-Gera `dist\2pc_1Kit.exe` (arquivo único, ~35 MB, com pedido de Administrador
+Gera `dist\MultiPC-KVM.exe` (arquivo único, ~35 MB, com pedido de Administrador
 embutido). Precisa de `pip install pyinstaller pystray`.
 
 Se o programa estiver aberto na hora de reconstruir, o `.exe` fica travado — e
@@ -215,7 +226,7 @@ que é o que permite comparar os dois PCs sem expor nada.
 Também dá para gerar sem abrir a janela:
 
 ```
-2pc_1Kit.exe --relatorio
+MultiPC-KVM.exe --relatorio
 ```
 
 Para copiar só o log: **Copiar registro**, ou selecione com o mouse e Ctrl+C
@@ -280,13 +291,13 @@ condições.
 
 | O quê | Onde |
 |---|---|
-| Log | pasta do programa — `2pc_1kit-<nome do PC>.log` |
+| Log | pasta do programa — `multipc-kvm-<nome do PC>.log` |
 | Relatórios | pasta do programa — `<papel>-<nome do PC>-<data>.txt` |
-| Configuração | `%APPDATA%\2pc_1Kit\config.json` |
+| Configuração | `%APPDATA%\MultiPC-KVM\config.json` |
 
 Log e relatórios ficam **ao lado do executável**, que é onde se procura. Se essa
 pasta não aceitar escrita (`.exe` numa pasta protegida, pendrive travado), os
-dois caem para `%APPDATA%\2pc_1Kit\` em vez de impedir o programa de abrir — a
+dois caem para `%APPDATA%\MultiPC-KVM\` em vez de impedir o programa de abrir — a
 primeira linha do log diz qual pasta está em uso. O botão **Abrir pasta**, no
 painel *Registro*, abre a pasta certa nos dois casos.
 

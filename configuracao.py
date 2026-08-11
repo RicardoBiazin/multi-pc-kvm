@@ -1,6 +1,6 @@
 """Carga e gravacao do config.json, e o registro de inicio automatico.
 
-O config fica em %APPDATA%\\2pc_1Kit\\config.json, e nao ao lado do .exe: assim
+O config fica em %APPDATA%\\MultiPC-KVM\\config.json, e nao ao lado do .exe: assim
 sobrevive a troca do executavel e nao esbarra em permissao de Program Files.
 Se houver um config.json ao lado do .exe, ele ganha -- e' a forma de levar a
 mesma configuracao pronta para o outro PC num pendrive.
@@ -15,9 +15,20 @@ import secrets
 import socket
 import sys
 
-APP = "2pc_1Kit"
+# Nome de EXIBICAO: janela, bandeja, rodape, relatorio, regra de firewall.
+APP = "Multi PC - KVM"
+# Nome usado em ARQUIVO e PASTA. Sem espacos de proposito: espaco em nome de
+# executavel obriga aspas em todo caminho que o referencia -- script, regra de
+# firewall e, principalmente, a chave de inicio automatico do Windows, que e'
+# onde isso costuma quebrar em silencio.
+APP_ARQUIVO = "MultiPC-KVM"
+# Nome anterior do programa. Fica aqui so' para achar a configuracao gravada
+# antes da renomeacao (v1.3): dentro dela esta' a CHAVE COMPARTILHADA, e perde-la
+# obrigaria a reconfigurar os dois PCs. Ver `pasta_de_dados`.
+APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
-VERSAO = "1.2"
+# O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
+VERSAO = "1.3"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -33,9 +44,31 @@ def pasta_do_executavel() -> pathlib.Path:
 
 def pasta_de_dados() -> pathlib.Path:
     base = os.environ.get("APPDATA") or str(pathlib.Path.home())
-    destino = pathlib.Path(base) / APP
+    destino = pathlib.Path(base) / APP_ARQUIVO
     destino.mkdir(parents=True, exist_ok=True)
+    _herdar_config_antigo(pathlib.Path(base) / APP_ANTIGO, destino)
     return destino
+
+
+def _herdar_config_antigo(antiga: pathlib.Path, nova: pathlib.Path) -> None:
+    """Traz o config.json da pasta usada antes da renomeacao (v1.3).
+
+    Sem isto, atualizar o programa apagaria a configuracao do ponto de vista do
+    usuario: o arquivo continuaria no disco, mas numa pasta que ninguem mais le'.
+    Dentro dele esta' a CHAVE COMPARTILHADA -- e uma chave nova de um lado so'
+    faz o handshake falhar sem explicacao obvia.
+
+    Copia, nao move: se o usuario voltar para a versao anterior por algum motivo,
+    ela ainda encontra a configuracao dela onde esperava.
+    """
+    novo = nova / "config.json"
+    antigo = antiga / "config.json"
+    if novo.exists() or not antigo.is_file():
+        return
+    try:
+        novo.write_bytes(antigo.read_bytes())
+    except OSError:
+        pass  # sem permissao ou disco cheio: segue com a configuracao padrao
 
 
 def caminho_config() -> pathlib.Path:
@@ -60,7 +93,7 @@ def pasta_de_saida() -> pathlib.Path:
     if _pasta_de_saida is not None:
         return _pasta_de_saida
     destino = pasta_do_executavel()
-    sonda = destino / ".2pc_1kit-teste-de-escrita"
+    sonda = destino / f".{APP_ARQUIVO.lower()}-teste-de-escrita"
     try:
         sonda.write_bytes(b"")
         sonda.unlink()
@@ -84,7 +117,7 @@ def caminho_log(nome_do_pc: str = "") -> pathlib.Path:
     global _caminho_log
     if _caminho_log is None:
         sufixo = f"-{nome_de_arquivo(nome_do_pc)}" if nome_do_pc else ""
-        _caminho_log = pasta_de_saida() / f"2pc_1kit{sufixo}.log"
+        _caminho_log = pasta_de_saida() / f"{APP_ARQUIVO.lower()}{sufixo}.log"
     return _caminho_log
 
 
@@ -99,6 +132,8 @@ def padrao() -> dict:
         "usar_bandeja": True,
         "descoberta": True,
         "avisar_troca": True,
+        # "sistema" segue o tema do Windows; "claro" e "escuro" mandam nele.
+        "tema": "sistema",
         "pcs": [
             {"nome": eu, "ip": ip_local(), "coluna": 2, "linha": 1,
              "servidor": True},
@@ -153,6 +188,32 @@ def inicio_automatico() -> bool:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_REGISTRO) as chave:
             winreg.QueryValueEx(chave, APP)
         return True
+    except OSError:
+        return False
+
+
+def migrar_inicio_automatico() -> bool:
+    """Passa o inicio automatico do nome antigo para o novo (v1.3).
+
+    Sem isto o Windows continuaria abrindo o EXECUTAVEL ANTIGO a cada login: a
+    entrada velha aponta para o 2pc_1Kit.exe, que sobrevive ao lado do novo na
+    mesma pasta. Dois programas destes no ar disputam os hooks de mouse e
+    teclado e nenhum funciona direito -- e a causa seria dificil de achar,
+    porque nada no programa novo denuncia o velho.
+
+    Devolve True se havia entrada antiga (para o chamador registrar no log).
+    """
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_REGISTRO, 0,
+                            winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as chave:
+            try:
+                winreg.QueryValueEx(chave, APP_ANTIGO)
+            except FileNotFoundError:
+                return False
+            winreg.DeleteValue(chave, APP_ANTIGO)
+            winreg.SetValueEx(chave, APP, 0, winreg.REG_SZ, _comando_de_inicio())
+            return True
     except OSError:
         return False
 

@@ -1,4 +1,4 @@
-"""Janela de configuracao e controle do 2pc_1Kit (tkinter).
+"""Janela de configuracao e controle do Multi PC - KVM (tkinter).
 
 Quatro partes: o papel desta maquina, a lista de PCs (nome e IP), o mapa onde se
 arrasta cada PC para a posicao do monitor dele, e os PCs achados na rede.
@@ -21,18 +21,15 @@ import layout as lay
 import motor
 import redes
 import relatorio
+import tema as tm
 
 COLUNAS, LINHAS = 6, 4  # tamanho do mapa de posicoes
 CELULA_L, CELULA_A = 118, 74
 MARGEM_MAPA = 10
 
-COR_FUNDO = "#f4f5f7"
-COR_CELULA = "#e2e5ea"
-COR_PC = "#4a7fd4"
-COR_PC_SERVIDOR = "#2f6b3f"
-COR_PC_EU = "#c9752b"
-COR_TEXTO = "#ffffff"
-COR_RODAPE = "#8b9099"
+# As cores nao ficam aqui: vem de `tema.PALETAS`, por nome, e sao pedidas com
+# `self._cor(...)`. Guardar literal no meio do codigo impediria trocar de tema
+# com a janela ja' montada -- que e' justamente o que `_aplicar_tema` faz.
 
 
 class ManipuladorDeLog(logging.Handler):
@@ -67,9 +64,14 @@ class Janela(tk.Tk):
 
         self.title(f"{conf.APP} v{conf.VERSAO} -- um teclado e um mouse para "
                    f"varios PCs")
-        self.configure(bg=COR_FUNDO)
+        # Widgets tk (nao-ttk) guardam a cor que receberam na criacao. Para o
+        # tema poder mudar depois, cada um se registra aqui dizendo QUAL nome de
+        # cor vai em qual opcao -- ver `_pintar`.
+        self._pintados: list[tuple[tk.Misc, dict[str, str]]] = []
+        self.paleta = tm.cores(cfg.get("tema", tm.SISTEMA))
         self.resizable(False, False)
         self._montar()
+        self._aplicar_tema()
         self._carregar_na_tela()
         self.protocol("WM_DELETE_WINDOW", self._ao_fechar)
 
@@ -82,14 +84,88 @@ class Janela(tk.Tk):
         if cfg.get("iniciar_ao_abrir") and not lay.Layout.de_config(cfg).validar():
             self.after(400, self._iniciar)
 
+    # -- tema ---------------------------------------------------------------
+
+    def _cor(self, nome: str) -> str:
+        return self.paleta[nome]
+
+    def _pintar(self, widget, **mapa: str):
+        """Aplica cores por NOME e registra o widget para o proximo tema.
+
+        `mapa` liga opcao do widget -> nome na paleta, por exemplo
+        `bg="fundo", fg="rodape"`.
+        """
+        self._pintados.append((widget, mapa))
+        widget.configure(**{op: self._cor(nome) for op, nome in mapa.items()})
+        return widget
+
+    def _aplicar_tema(self) -> None:
+        self.paleta = tm.cores(self.cfg.get("tema", tm.SISTEMA))
+        self._estilo_ttk()
+        self.configure(bg=self._cor("fundo"))
+        for widget, mapa in list(self._pintados):
+            try:
+                widget.configure(**{op: self._cor(n) for op, n in mapa.items()})
+            except tk.TclError:
+                self._pintados.remove((widget, mapa))  # widget ja' destruido
+        self._desenhar_mapa()
+
+    def _estilo_ttk(self) -> None:
+        """Cor dos widgets ttk, que nao aceitam `configure(bg=...)` direto.
+
+        O tema "vista" e' desenhado pelo proprio Windows e IGNORA cor de fundo --
+        no escuro ele deixaria molduras e rotulos brancos no meio da janela. O
+        "clam" e' desenhado pelo Tk e obedece, entao a troca de tema troca junto
+        o motor de desenho. No claro seguimos no "vista", que e' o que combina
+        com o resto do sistema.
+        """
+        escuro = self.cfg.get("tema") and tm.resolver(self.cfg["tema"]) == tm.ESCURO
+        estilo = ttk.Style(self)
+        try:
+            estilo.theme_use("clam" if escuro else "vista")
+        except tk.TclError:
+            pass
+        if not escuro:
+            return
+        fundo, texto = self._cor("fundo"), self._cor("log_texto")
+        campo, borda = self._cor("celula"), self._cor("celula_borda")
+        estilo.configure(".", background=fundo, foreground=texto,
+                         fieldbackground=campo, bordercolor=borda)
+        for nome in ("TFrame", "TLabel", "TLabelframe", "TCheckbutton",
+                     "TRadiobutton"):
+            estilo.configure(nome, background=fundo, foreground=texto)
+        estilo.configure("TLabelframe.Label", background=fundo, foreground=texto)
+        estilo.configure("TButton", background=campo, foreground=texto)
+        estilo.map("TButton", background=[("active", borda)])
+        estilo.configure("TEntry", fieldbackground=campo, foreground=texto,
+                         insertcolor=texto)
+        estilo.configure("TCombobox", fieldbackground=campo, foreground=texto)
+        estilo.configure("Treeview", background=campo, foreground=texto,
+                         fieldbackground=campo)
+        estilo.configure("Treeview.Heading", background=borda, foreground=texto)
+        estilo.configure("TScrollbar", background=campo, troughcolor=fundo)
+
+    def _trocar_tema(self) -> None:
+        """Alterna claro/escuro e grava a escolha.
+
+        A partir daqui a preferencia deixa de ser "sistema": quem clicou quer
+        mandar. Voltar a seguir o Windows e' apagar `tema` do config.json.
+        """
+        atual = tm.resolver(self.cfg.get("tema", tm.SISTEMA))
+        self.cfg["tema"] = tm.CLARO if atual == tm.ESCURO else tm.ESCURO
+        conf.salvar(self.cfg)
+        self._aplicar_tema()
+        self._atualizar_botao_tema()
+
+    def _atualizar_botao_tema(self) -> None:
+        escuro = tm.resolver(self.cfg.get("tema", tm.SISTEMA)) == tm.ESCURO
+        # O botao mostra para onde VAI, nao onde esta'.
+        self.botao_tema.configure(text="Tema claro" if escuro else "Tema escuro")
+
     # -- construcao da janela ----------------------------------------------
 
     def _montar(self) -> None:
-        estilo = ttk.Style(self)
-        try:
-            estilo.theme_use("vista")
-        except tk.TclError:
-            pass
+        self._estilo_ttk()
 
         # -- identidade e papel desta maquina
         topo = ttk.LabelFrame(self, text=" Esta maquina ")
@@ -194,9 +270,10 @@ class Janela(tk.Tk):
         direita = ttk.LabelFrame(self, text=" Posicao dos monitores "
                                             "(arraste cada PC) ")
         direita.grid(row=1, column=1, rowspan=2, sticky="new", padx=(5, 10), pady=4)
-        self.mapa = tk.Canvas(direita, bg=COR_FUNDO, highlightthickness=0,
+        self.mapa = tk.Canvas(direita, highlightthickness=0,
                               width=COLUNAS * CELULA_L + 2 * MARGEM_MAPA,
                               height=LINHAS * CELULA_A + 2 * MARGEM_MAPA)
+        self._pintar(self.mapa, bg="fundo")
         self.mapa.grid(row=0, column=0, padx=8, pady=8)
         self.mapa.bind("<Button-1>", self._mapa_clique)
         self.mapa.bind("<B1-Motion>", self._mapa_arrasto)
@@ -235,8 +312,9 @@ class Janela(tk.Tk):
 
         self.var_aviso = tk.StringVar()
         self.rotulo_aviso = tk.Label(self, textvariable=self.var_aviso, anchor="w",
-                                     bg="#fde7c8", fg="#7a4a10", justify="left",
+                                     justify="left",
                                      font=("Segoe UI", 8), padx=8, pady=4)
+        self._pintar(self.rotulo_aviso, bg="aviso_fundo", fg="aviso_texto")
         # so' aparece quando ha' o que avisar -- ver _verificar_rede()
 
         # A faixa de aviso fica na linha 4 e a barra de estado na 5: as duas na
@@ -250,7 +328,8 @@ class Janela(tk.Tk):
                         padx=10, pady=(4, 10))
         self.texto_log = tk.Text(quadro_log, height=8, width=125, wrap="none",
                                  font=("Consolas", 8), state="disabled",
-                                 bg="#1e1f22", fg="#d6d8dc", relief="flat")
+                                 relief="flat")
+        self._pintar(self.texto_log, bg="log_fundo", fg="log_texto")
         self.texto_log.grid(row=0, column=0, padx=6, pady=6, sticky="nsew")
         barra = ttk.Scrollbar(quadro_log, command=self.texto_log.yview)
         barra.grid(row=0, column=1, sticky="ns", pady=6)
@@ -275,20 +354,26 @@ class Janela(tk.Tk):
                    command=self._limpar_registro).grid(row=0, column=3, padx=6)
 
     def _montar_rodape(self) -> None:
-        """Versao e autoria, no mesmo formato dos outros projetos."""
-        rodape = tk.Frame(self, bg=COR_FUNDO)
+        """Versao, autoria e a troca de tema."""
+        rodape = tk.Frame(self)
+        self._pintar(rodape, bg="fundo")
         rodape.grid(row=7, column=0, columnspan=2, sticky="ew", padx=14,
                     pady=(0, 8))
-        rodape.columnconfigure(0, weight=1)
+        rodape.columnconfigure(1, weight=1)
 
-        tk.Label(rodape, text=f"{conf.APP} v{conf.VERSAO}", bg=COR_FUNDO,
-                 fg=COR_RODAPE, font=("Segoe UI", 8), anchor="w").grid(
-            row=0, column=0, sticky="w")
+        versao = tk.Label(rodape, text=f"{conf.APP} v{conf.VERSAO}",
+                          font=("Segoe UI", 8), anchor="w")
+        self._pintar(versao, bg="fundo", fg="rodape")
+        versao.grid(row=0, column=0, sticky="w")
+
+        self.botao_tema = ttk.Button(rodape, width=12, command=self._trocar_tema)
+        self.botao_tema.grid(row=0, column=1, padx=10)
+        self._atualizar_botao_tema()
 
         credito = tk.Label(rodape, text=f"Desenvolvido por {conf.AUTOR}",
-                           bg=COR_FUNDO, fg=COR_RODAPE, font=("Segoe UI", 8),
-                           cursor="hand2")
-        credito.grid(row=0, column=1, sticky="e")
+                           font=("Segoe UI", 8), cursor="hand2")
+        self._pintar(credito, bg="fundo", fg="rodape")
+        credito.grid(row=0, column=2, sticky="e")
         credito.bind("<Button-1>", lambda _e: self._abrir_linkedin())
         credito.bind("<Enter>",
                      lambda _e: credito.configure(font=("Segoe UI", 8, "underline")))
@@ -347,8 +432,10 @@ class Janela(tk.Tk):
                 x = MARGEM_MAPA + coluna * CELULA_L
                 y = MARGEM_MAPA + linha * CELULA_A
                 self.mapa.create_rectangle(x + 3, y + 3, x + CELULA_L - 3,
-                                           y + CELULA_A - 3, fill=COR_CELULA,
-                                           outline="#cfd3da", dash=(2, 3))
+                                           y + CELULA_A - 3,
+                                           fill=self._cor("celula"),
+                                           outline=self._cor("celula_borda"),
+                                           dash=(2, 3))
         for pc in self._pcs():
             self._desenhar_pc(pc)
 
@@ -356,23 +443,24 @@ class Janela(tk.Tk):
         x = MARGEM_MAPA + pc["coluna"] * CELULA_L
         y = MARGEM_MAPA + pc["linha"] * CELULA_A
         if pc.get("servidor"):
-            cor = COR_PC_SERVIDOR
+            cor = self._cor("pc_servidor")
         elif pc["nome"] == self.cfg.get("este_pc"):
-            cor = COR_PC_EU
+            cor = self._cor("pc_eu")
         else:
-            cor = COR_PC
+            cor = self._cor("pc")
         largura = 3 if pc["nome"] == self.selecionado else 1
         etiqueta = f"pc:{pc['nome']}"
         self.mapa.create_rectangle(x + 6, y + 6, x + CELULA_L - 6, y + CELULA_A - 6,
-                                   fill=cor, outline="#20242b", width=largura,
-                                   tags=etiqueta)
+                                   fill=cor, outline=self._cor("pc_borda"),
+                                   width=largura, tags=etiqueta)
         legenda = pc["nome"]
         if pc.get("servidor"):
             legenda += "\n(teclado)"
         if pc["nome"] == self.cfg.get("este_pc"):
             legenda += "\n(este PC)"
         self.mapa.create_text(x + CELULA_L / 2, y + CELULA_A / 2, text=legenda,
-                              fill=COR_TEXTO, font=("Segoe UI", 8, "bold"),
+                              fill=self._cor("texto_no_pc"),
+                              font=("Segoe UI", 8, "bold"),
                               justify="center", tags=etiqueta)
 
     # -- papel desta maquina -----------------------------------------------
@@ -455,7 +543,7 @@ class Janela(tk.Tk):
         if not self.selecionado:
             return
         if len(self._pcs()) <= 1:
-            messagebox.showinfo("2pc_1Kit", "Tem de sobrar pelo menos um PC.")
+            messagebox.showinfo(conf.APP, "Tem de sobrar pelo menos um PC.")
             return
         self.cfg["pcs"] = [p for p in self._pcs() if p["nome"] != self.selecionado]
         self.selecionado = None
@@ -469,7 +557,7 @@ class Janela(tk.Tk):
         novo = self.var_nome.get().strip()
         if novo and novo != pc["nome"]:
             if any(p["nome"] == novo for p in self._pcs()):
-                messagebox.showwarning("2pc_1Kit", f"Ja' existe um PC '{novo}'.")
+                messagebox.showwarning(conf.APP, f"Ja' existe um PC '{novo}'.")
                 self.var_nome.set(pc["nome"])
             else:
                 if self.cfg.get("este_pc") == pc["nome"]:
@@ -565,7 +653,7 @@ class Janela(tk.Tk):
             self._avisar("porta invalida")
             return
         if not messagebox.askyesno(
-                "2pc_1Kit",
+                conf.APP,
                 f"Criar regras no Firewall do Windows liberando a entrada em\n"
                 f"TCP {porta} e UDP {descoberta.PORTA}, para as redes particular "
                 f"e de dominio?\n\nIsso altera a configuracao do Windows."):
@@ -573,9 +661,9 @@ class Janela(tk.Tk):
         ok, mensagem = diagnostico.liberar(porta, descoberta.PORTA)
         logging.getLogger("diagnostico").info("firewall: %s", mensagem)
         if ok:
-            messagebox.showinfo("2pc_1Kit", mensagem)
+            messagebox.showinfo(conf.APP, mensagem)
         else:
-            messagebox.showerror("2pc_1Kit", mensagem)
+            messagebox.showerror(conf.APP, mensagem)
         self._verificar_rede()
 
     # -- arrastar no mapa ---------------------------------------------------
@@ -609,8 +697,8 @@ class Janela(tk.Tk):
         x = MARGEM_MAPA + coluna * CELULA_L
         y = MARGEM_MAPA + linha * CELULA_A
         self.mapa.create_rectangle(x + 6, y + 6, x + CELULA_L - 6, y + CELULA_A - 6,
-                                   outline="#20242b", width=2, dash=(4, 3),
-                                   tags="fantasma")
+                                   outline=self._cor("pc_borda"), width=2,
+                                   dash=(4, 3), tags="fantasma")
 
     def _mapa_solta(self, evento) -> None:
         if self._arrastando is None:
@@ -744,7 +832,7 @@ class Janela(tk.Tk):
         try:
             conf.definir_inicio_automatico(self.var_windows.get())
         except OSError as exc:
-            messagebox.showerror("2pc_1Kit", f"Nao consegui alterar o inicio "
+            messagebox.showerror(conf.APP, f"Nao consegui alterar o inicio "
                                              f"automatico:\n{exc}")
             self.var_windows.set(conf.inicio_automatico())
 
@@ -778,7 +866,7 @@ class Janela(tk.Tk):
         self._redesenhar()
         if problemas:
             messagebox.showwarning(
-                "2pc_1Kit", "Gravado, mas ainda falta:\n\n- "
+                conf.APP, "Gravado, mas ainda falta:\n\n- "
                             + "\n- ".join(problemas))
         else:
             self._avisar(f"gravado em {conf.caminho_config()}")
@@ -788,7 +876,7 @@ class Janela(tk.Tk):
     def _iniciar(self) -> None:
         problemas = self._recolher()
         if problemas:
-            messagebox.showwarning("2pc_1Kit",
+            messagebox.showwarning(conf.APP,
                                    "Corrija antes de iniciar:\n\n- "
                                    + "\n- ".join(problemas))
             return
@@ -796,7 +884,7 @@ class Janela(tk.Tk):
         try:
             self.motor.iniciar(self.cfg)
         except Exception as exc:
-            messagebox.showerror("2pc_1Kit", f"Nao consegui iniciar:\n{exc}")
+            messagebox.showerror(conf.APP, f"Nao consegui iniciar:\n{exc}")
             return
         self._atualizar_estado()
 
@@ -927,7 +1015,7 @@ class Janela(tk.Tk):
         self.clipboard_append(str(caminho))
         self._avisar(f"relatorio em {caminho} (caminho copiado)", 30)
         if messagebox.askyesno(
-                "2pc_1Kit",
+                conf.APP,
                 f"Relatorio gerado:\n\n{caminho}\n\n"
                 f"O caminho ja' foi copiado. O arquivo nao contem a chave "
                 f"compartilhada.\n\nAbrir a pasta agora?"):

@@ -1,4 +1,4 @@
-"""Transporte do 2pc_1Kit: frames com prefixo de tamanho, handshake e cifra.
+"""Transporte do Multi PC - KVM: frames com prefixo de tamanho, handshake e cifra.
 
 Protocolo de linha
 ------------------

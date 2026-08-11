@@ -25,6 +25,7 @@ import time
 
 import alvo as alv
 import clipboard_win
+import configuracao as conf
 import entrada_win as ew
 import layout as lay
 import protocolo
@@ -202,7 +203,7 @@ class Cliente:
             return
         if conflitos:
             aviso = (f"{', '.join(conflitos)} esta' rodando neste PC e faz a "
-                     f"mesma coisa que o 2pc_1Kit: os dois disputam os hooks de "
+                     f"mesma coisa que o {conf.APP}: os dois disputam os hooks de "
                      f"mouse e teclado e nenhum funciona direito. Feche-o.")
         else:
             aviso = (f"{detalhe}. Verifique se o programa esta' como "

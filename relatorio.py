@@ -149,7 +149,7 @@ def _rede() -> list[str]:
         linhas.append(f"  {nome:<34} {categoria}{alerta}")
 
     linhas += _secao("firewall")
-    linhas.append(f"  Regras do 2pc_1Kit criadas: "
+    linhas.append(f"  Regras do {conf.APP} criadas: "
                   f"{'sim' if diagnostico.regras_existem() else 'NAO'}")
     return linhas
 

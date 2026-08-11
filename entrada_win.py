@@ -1,4 +1,5 @@
-"""Camada Win32 do 2pc_1Kit, via ctypes: captura por hook e injecao por SendInput.
+"""Camada Win32 do Multi PC - KVM, via ctypes: captura por hook e injecao por
+SendInput.
 
 Duas metades independentes:
 
@@ -61,7 +62,7 @@ MOUSE_MOVE_ABSOLUTE = 0x01
 PAGINA_GENERICA, USO_MOUSE = 0x01, 0x02
 HWND_MESSAGE = -3
 
-CLASSE_RAW = "2pc1KitRawInput"
+CLASSE_RAW = "MultiPCKVMRawInput"
 GWLP_WNDPROC = -4
 ERRO_CLASSE_JA_EXISTE = 1410
 
@@ -88,7 +89,7 @@ INTERVALO_RENOVACAO = 60.0  # s
 # Ganchos de baixo nivel sao chamados em ordem INVERSA de instalacao: o mais
 # recente primeiro. Quem instalar depois de nos passa na frente e pode consumir a
 # tecla antes -- e' o que o cliente de Area de Trabalho Remota faz em tela cheia,
-# para mandar o teclado a' sessao remota. O 2pc_1Kit sobe antes, o `mstsc` sobe
+# para mandar o teclado a' sessao remota. Este programa sobe antes, o `mstsc` sobe
 # depois, e o teclado para de atravessar enquanto o mouse continua indo (o mouse
 # vem pelo Raw Input, que nao entra nessa fila).
 #
@@ -593,7 +594,7 @@ class Captura(threading.Thread):
                 log.warning("RegisterClass falhou (erro %d)", erro)
                 return
         self._hwnd = user32.CreateWindowExW(
-            0, CLASSE_RAW, "2pc_1Kit", 0, 0, 0, 0, 0,
+            0, CLASSE_RAW, "Multi PC - KVM", 0, 0, 0, 0, 0,
             wintypes.HWND(HWND_MESSAGE), None, classe.hInstance, None)
         if not self._hwnd:
             log.warning("nao consegui criar a janela de mensagens (erro %d)",

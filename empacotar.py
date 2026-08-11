@@ -1,10 +1,10 @@
-"""Gera o 2pc_1Kit.exe (arquivo unico, com pedido de Administrador).
+"""Gera o executavel (arquivo unico, com pedido de Administrador).
 
     python empacotar.py
 
-O resultado fica em dist\\2pc_1Kit.exe. E' so' copiar esse arquivo para cada PC
--- a configuracao nao vai junto, cada maquina guarda a dela em
-%APPDATA%\\2pc_1Kit\\config.json.
+O resultado fica em dist\\MultiPC-KVM.exe. E' so' copiar esse arquivo para cada
+PC -- a configuracao nao vai junto, cada maquina guarda a dela em
+%APPDATA%\\MultiPC-KVM\\config.json.
 """
 
 from __future__ import annotations
@@ -14,19 +14,24 @@ import shutil
 import subprocess
 import sys
 
+import configuracao as conf
+
 RAIZ = pathlib.Path(__file__).resolve().parent
 ICONE = RAIZ / "icone.ico"
 VERSAO_TXT = RAIZ / "versao.txt"
+NOME_EXE = f"{conf.APP_ARQUIVO}.exe"
 
 # Copia do projeto no outro PC (\\192.168.10.2\DEV-Direito). E' de la' que a
 # outra maquina roda o programa, entao o .exe tem de ir junto a cada build: com
 # versoes diferentes nos dois lados o protocolo quebra, e sem barulho nenhum.
+# A PASTA nao foi renomeada junto com o programa na v1.3: ela e' o
+# compartilhamento que vira o Y:, e renomea-la exigiria refazer o
+# compartilhamento no outro PC a mao.
 ESPELHOS = (pathlib.Path("Y:/2pc_1Kit/dist"),)
 
 
 def gerar_versao() -> pathlib.Path:
     """Recurso de versao do Windows: alimenta as Propriedades do .exe."""
-    import configuracao as conf
     partes = conf.VERSAO.split(".")
     numero = ", ".join((partes + ["0", "0", "0"])[:4])
     VERSAO_TXT.write_text(f"""VSVersionInfo(
@@ -77,7 +82,7 @@ def destino() -> pathlib.Path:
     nem encerrar a instancia aberta -- melhor gerar ao lado do que falhar.
     """
     dist = RAIZ / "dist"
-    exe = dist / "2pc_1Kit.exe"
+    exe = dist / NOME_EXE
     if exe.exists():
         try:
             with open(exe, "r+b"):
@@ -105,7 +110,7 @@ def main() -> int:
     # de diagnostico ao lado dele, e um rmtree aqui apagava justamente o que o
     # usuario guardou para descobrir por que algo nao funcionou.
     saida.mkdir(parents=True, exist_ok=True)
-    (saida / "2pc_1Kit.exe").unlink(missing_ok=True)
+    (saida / NOME_EXE).unlink(missing_ok=True)
 
     comando = [
         sys.executable, "-m", "PyInstaller",
@@ -114,7 +119,7 @@ def main() -> int:
         "--windowed",             # sem janela preta de console
         "--uac-admin",            # pede Administrador: sem isso o Windows
                                   # bloqueia input sobre janelas elevadas
-        "--name", "2pc_1Kit",
+        "--name", conf.APP_ARQUIVO,
         "--icon", str(ICONE),
         "--version-file", str(VERSAO_TXT),
         "--distpath", str(saida),
@@ -127,7 +132,7 @@ def main() -> int:
     if resultado.returncode != 0:
         return resultado.returncode
 
-    exe = saida / "2pc_1Kit.exe"
+    exe = saida / NOME_EXE
     print(f"\nPronto: {exe}  ({exe.stat().st_size / 1e6:.1f} MB)")
     espelhar(exe)
     print("\nNa primeira vez o programa cria a configuracao; use a mesma chave")
@@ -145,7 +150,8 @@ def espelhar(exe: pathlib.Path) -> None:
             print(f"Copiado tambem para: {alvo}")
         except PermissionError:
             print(f"NAO consegui copiar para {alvo}: o arquivo esta' em uso.")
-            print("   Feche o 2pc_1Kit naquele PC e rode de novo, ou copie a mao.")
+            print(f"   Feche o {conf.APP} naquele PC e rode de novo, ou copie "
+                  "a mao.")
         except OSError as erro:
             print(f"NAO consegui copiar para {alvo}: {erro}")
 

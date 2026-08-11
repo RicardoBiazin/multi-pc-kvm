@@ -1,12 +1,12 @@
-"""2pc_1Kit -- um teclado e um mouse para varios PCs Windows na mesma rede.
+"""Multi PC - KVM -- um teclado e um mouse para varios PCs Windows na mesma rede.
 
 Sem argumentos abre a janela de configuracao. O mesmo executavel serve para
 todos os PCs: quem e' servidor e quem e' cliente sai do layout, e cada maquina
 so' precisa saber qual da lista e' ela ("Este PC e'").
 
-    2pc_1Kit.exe                 janela de configuracao
-    2pc_1Kit.exe --sem-janela    sobe direto pelo config gravado
-    2pc_1Kit.exe --sem-captura   servidor so' com area de transferencia (teste)
+    MultiPC-KVM.exe                 janela de configuracao
+    MultiPC-KVM.exe --sem-janela    sobe direto pelo config gravado
+    MultiPC-KVM.exe --sem-captura   servidor so' com area de transferencia (teste)
 
 Atalho de panico: Ctrl+Alt+Shift+Esc devolve teclado e mouse ao servidor.
 """
@@ -70,6 +70,9 @@ def main() -> int:
                  100 * (1 - area / (largura * altura)))
     log.info("configuracao: %s", conf.caminho_config())
     log.info("log e relatorios: %s", conf.pasta_de_saida())
+    if conf.migrar_inicio_automatico():
+        log.info("inicio automatico apontava para a versao anterior "
+                 "(2pc_1Kit.exe); passou a apontar para este executavel")
 
     import descoberta as _desc
     import diagnostico
