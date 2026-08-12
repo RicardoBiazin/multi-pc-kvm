@@ -492,11 +492,17 @@ def teste_vigia_do_teclado() -> None:
     cap._visto_raw = cap._visto_hook = agora
     cap.em_disputa = lambda: True
     decisao = cap._decidir(agora + ew.INTERVALO_DISPUTA, agora)
-    checar("comandando, renova em segundos e nao em um minuto",
+    checar("comandando, renova no intervalo da disputa",
            decisao is not None and "rapida" in decisao[0])
+    # A cadencia rapida foi RECUADA em 11/08: com 2s o servidor caiu tres vezes
+    # em tres minutos, contra 7 horas limpas antes. Enquanto a corrupcao de heap
+    # nao for localizada, agitar o subsistema dos ganchos nao compensa.
+    checar("a cadencia da disputa nao e' mais agressiva que a normal",
+           ew.INTERVALO_DISPUTA >= ew.INTERVALO_RENOVACAO,
+           f"{ew.INTERVALO_DISPUTA}s vs {ew.INTERVALO_RENOVACAO}s")
     cap.em_disputa = lambda: False
-    checar("em casa, volta ao intervalo longo",
-           cap._decidir(agora + ew.INTERVALO_DISPUTA, agora) is None)
+    checar("em casa, o intervalo nao encurta",
+           cap._decidir(agora + ew.INTERVALO_DISPUTA - 1, agora) is None)
     cap.em_disputa = lambda: 1 / 0  # dono com defeito nao pode derrubar o vigia
     checar("erro no sinal do dono nao quebra a decisao",
            cap._decidir(agora + ew.INTERVALO_RENOVACAO, agora) is not None)

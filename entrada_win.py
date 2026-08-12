@@ -98,9 +98,25 @@ INTERVALO_RENOVACAO = 60.0  # s
 # segundos o buraco deixa de ser perceptivel. So' vale a pena enquanto estamos
 # comandando: em casa, o teclado e' para funcionar aqui mesmo.
 #
-# O laco do vigia roda a cada INTERVALO_VIGIA, entao esse e' o piso real: nao
-# adianta pedir menos do que ele.
-INTERVALO_DISPUTA = INTERVALO_VIGIA
+# RECUADO EM 11/08/2026, DE 2s PARA O MESMO INTERVALO DA RENOVACAO NORMAL.
+#
+# Com 2 segundos, o servidor passou a cair de minuto em minuto: a sessao
+# anterior tinha rodado 7 HORAS e sido encerrada limpa; com a cadencia rapida
+# foram tres quedas em tres minutos, todas com corrupcao de heap (0xc0000374) e
+# nenhuma linha no log. O que o log mostrava era 24 reinstalacoes em 50 segundos
+# -- e, pior, `mouse visto ha' 38s` durante elas: a rotatividade nao estava nem
+# consertando o gancho, so' trocando estrutura de hook debaixo de callbacks que
+# disparam centenas de vezes por segundo.
+#
+# Nao esta' provado que a reinstalacao CAUSA a corrupcao; a corrupcao ja'
+# existia antes desta constante. Esta' medido que a frequencia disparou com ela.
+# Ate' a causa aparecer (Page Heap no PC que cai), o certo e' nao agitar o
+# subsistema que corrompe memoria.
+#
+# O custo do recuo: quando outro programa toma o primeiro lugar na fila dos
+# ganchos -- o cliente de Area de Trabalho Remota em tela cheia --, o teclado
+# leva ate' um minuto para voltar a atravessar, em vez de dois segundos.
+INTERVALO_DISPUTA = INTERVALO_RENOVACAO
 
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_ESCAPE = 0x10, 0x11, 0x12, 0x1B
 VK_LWIN, VK_RWIN = 0x5B, 0x5C
