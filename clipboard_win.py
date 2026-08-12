@@ -153,8 +153,28 @@ def escrever(msg: dict, tentativas: int = 3) -> None:
 
     Como na leitura, outro processo pode mexer no clipboard no meio da escrita
     (`SetClipboardData` devolve 'identificador invalido'). E' transitorio.
+
+    TEXTO VAI POR `SetClipboardText`, E NAO POR `SetClipboardData`.
+
+    O programa fechava sozinho, sem nada no log, com corrupcao de heap. O Page
+    Heap parou o processo no ato e o dump mostrou onde:
+
+        user32!SetClipboardData
+        user32!ConvertMemHandle
+        KERNELBASE!GlobalFlags
+        ntdll!RtlGetUserInfoHeap
+        verifier!AVrfpDphFindBusyMemoryNoCheck   <- bloco ja' liberado
+
+    O `SetClipboardData` estava recebendo um handle de memoria global cujo bloco
+    ja' nao valia -- e quem alocou e passou esse handle foi o proprio pywin32,
+    dentro da chamada. `SetClipboardText` percorre outro caminho no pywin32 para
+    o mesmo fim.
+
+    Nao esta' provado que isto elimina a queda; esta' provado que era ALI que ela
+    acontecia. Manter o Page Heap ligado ate' confirmar.
     """
-    if msg["fmt"] == "texto":
+    escrever_texto = msg["fmt"] == "texto"
+    if escrever_texto:
         formato, dados = win32con.CF_UNICODETEXT, msg["dados"]
     elif msg["fmt"] == "arquivos":
         formato = win32con.CF_HDROP
@@ -167,7 +187,10 @@ def escrever(msg: dict, tentativas: int = 3) -> None:
         try:
             with _Aberto():
                 wcb.EmptyClipboard()
-                wcb.SetClipboardData(formato, dados)
+                if escrever_texto:
+                    wcb.SetClipboardText(dados, formato)
+                else:
+                    wcb.SetClipboardData(formato, dados)
             return
         except (OSError, pywintypes.error):
             if n == tentativas - 1:
