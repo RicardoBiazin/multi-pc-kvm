@@ -26,8 +26,8 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Instalar cryptography
-        run: pip install "cryptography>=50"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
       - name: Compilar e importar o core (smoke)
         run: |
           python -m compileall .
