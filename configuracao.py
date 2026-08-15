@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.0"
+VERSAO = "2.0.1"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 

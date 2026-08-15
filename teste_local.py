@@ -17,6 +17,7 @@ import io
 import pathlib
 import sys
 import time
+import threading
 
 from PIL import Image
 
@@ -649,6 +650,55 @@ def teste_roteamento() -> None:
     checar("atalho de panico devolve o controle", ctl.atual == "B")
 
 
+def teste_watchdog_devolve_comando() -> None:
+    """Cliente que TRAVA (nao fecha o TCP) tem de devolver o comando ao servidor.
+
+    O `_receber_cliente` so' limpa quando o `receber` levanta; um cliente travado
+    deixa o `receber` pendurado para sempre. O watchdog (`_derrubar`, chamado por
+    `_vigiar` quando o pong seca) cobre esse buraco. Aqui exercitamos o
+    `_derrubar` isolado: com o cursor num cliente, derruba-lo devolve o controle.
+    """
+    print("watchdog: cliente travado devolve o comando ao servidor")
+    import servidor as srvmod
+
+    borda.ew.mover_cursor = lambda x, y: None  # nao mexe no cursor real
+    enviados: list = []
+    ctl = borda.Controle(_layout_de_teste(), "B",
+                         lambda destino, msg: enviados.append((destino, msg)))
+    ctl.conectados.update({"A", "C", "D"})
+
+    # Servidor sem __init__: evita instalar hooks/ler cfg; so' o que _derrubar usa.
+    srv = object.__new__(srvmod.Servidor)
+    srv._lock = threading.Lock()
+    srv.clientes = {}
+    srv.ultimo_pong = {}
+    srv.ao_mudar = lambda: None
+    srv.controle = ctl
+
+    # Leva o cursor para C (encosta na borda direita) e trava o C.
+    x0, y0, largura, altura = ew.geometria_virtual()
+    ctl.tratar({"t": "mv", "pos": (x0 + largura - 1, 300)})
+    checar("cursor foi para C", ctl.atual == "C")
+
+    class FakeConn:
+        def __init__(self): self.fechado = False
+        def fechar(self): self.fechado = True
+
+    conn = FakeConn()
+    srv.clientes["C"] = conn
+    srv.ultimo_pong["C"] = 0.0  # muito antigo -> travado para o watchdog
+
+    srv._derrubar("C", conn, "parou de responder (teste)")
+    checar("comando voltou ao servidor", ctl.atual == "B")
+    checar("C saiu da lista de clientes", "C" not in srv.clientes)
+    checar("socket do C foi fechado", conn.fechado is True)
+
+    # Idempotente: derrubar de novo (ja' saiu) nao re-age nem explode.
+    conn2 = FakeConn()
+    srv._derrubar("C", conn2, "de novo")
+    checar("derrubar repetido e' inofensivo", conn2.fechado is False)
+
+
 def teste_quique() -> None:
     """Regressao: o cursor entra a MARGEM px da borda e um tremor de mao no
     sentido de volta devolvia o controle na hora -- o cursor mal aparecia."""
@@ -1064,6 +1114,7 @@ def main() -> int:
     teste_raw_input_apos_religar()
     teste_hooks()
     teste_roteamento()
+    teste_watchdog_devolve_comando()
     teste_quique()
     teste_movimento_bruto()
     teste_atalho_e_troca()

@@ -21,7 +21,12 @@ import protocolo
 log = logging.getLogger("servidor")
 
 FILA_MAXIMA = 2000  # eventos pendentes antes de comecar a descartar movimento
-INTERVALO_PING = 5.0
+INTERVALO_PING = 2.5
+# Sem NENHUMA resposta do cliente por este tempo, ele e' dado como travado e o
+# comando volta para o servidor. Precisa de folga acima de INTERVALO_PING para o
+# watchdog nao derrubar um cliente saudavel numa oscilacao curta da rede.
+TIMEOUT_SEM_RESPOSTA = 8.0
+INTERVALO_WATCHDOG = 1.0  # de quanto em quanto o watchdog confere os clientes
 
 
 class Servidor:
@@ -40,6 +45,10 @@ class Servidor:
         # nossa frente na fila dos ganchos. Ver INTERVALO_DISPUTA.
         self.captura.em_disputa = lambda: self.controle.remoto
         self.clientes: dict[str, protocolo.Conexao] = {}
+        # Ultima vez (monotonic) que chegou QUALQUER mensagem de cada cliente. O
+        # watchdog usa isto para detectar quem travou: um cliente vivo pelo menos
+        # responde os pings, um travado nao manda mais nada.
+        self.ultimo_pong: dict[str, float] = {}
         self.sinc: clipboard_win.Sincronizador | None = None
         self._lock = threading.Lock()
         self._avisos: dict[str, float] = {}
@@ -136,6 +145,7 @@ class Servidor:
 
         threading.Thread(target=self._enviar, name="rede-tx", daemon=True).start()
         threading.Thread(target=self._pingar, name="ping", daemon=True).start()
+        threading.Thread(target=self._vigiar, name="watchdog", daemon=True).start()
         sinc = clipboard_win.Sincronizador(self.difundir, self.parar)
         sinc.start()
         self.sinc = sinc
@@ -211,6 +221,7 @@ class Servidor:
         with self._lock:
             antiga = self.clientes.pop(nome, None)
             self.clientes[nome] = conn
+            self.ultimo_pong[nome] = time.monotonic()  # nasce vivo
         if antiga is not None:
             antiga.fechar()  # reconexao: derruba a sessao velha
         self.controle.conectados.add(nome)
@@ -230,11 +241,14 @@ class Servidor:
             with self._lock:
                 if self.clientes.get(nome) is conn:
                     del self.clientes[nome]
+                    self.ultimo_pong.pop(nome, None)
                     self.controle.cliente_caiu(nome)
             conn.fechar()
             self.ao_mudar()
 
     def _tratar(self, nome: str, msg: dict) -> None:
+        # Qualquer mensagem prova que o cliente esta' vivo — inclusive o pong.
+        self.ultimo_pong[nome] = time.monotonic()
         tipo = msg.get("t")
         if tipo == "sair":
             self.controle.saiu_do_cliente(nome, msg["dir"], msg["rel"])
@@ -328,3 +342,40 @@ class Servidor:
     def _pingar(self) -> None:
         while not self.parar.wait(INTERVALO_PING):
             self.difundir({"t": "ping", "ts": time.perf_counter()})
+
+    def _derrubar(self, nome: str, conn: "protocolo.Conexao", motivo: str) -> None:
+        """Tira o cliente da sessao e DEVOLVE o comando ao servidor.
+
+        `cliente_caiu` ja' faz o retorno: se o cursor estava neste cliente,
+        `largar` solta o bloqueio e o teclado/mouse voltam para ca'. Fechar o
+        socket destrava qualquer `receber`/`sendall` pendurado nele.
+        """
+        caiu = False
+        with self._lock:
+            if self.clientes.get(nome) is conn:
+                del self.clientes[nome]
+                self.ultimo_pong.pop(nome, None)
+                self.controle.cliente_caiu(nome)
+                caiu = True
+        if caiu:
+            log.warning("'%s' %s -- comando de volta ao servidor", nome, motivo)
+            conn.fechar()
+            self.ao_mudar()
+
+    def _vigiar(self) -> None:
+        """Watchdog: derruba o cliente que parou de responder.
+
+        POR QUE EXISTE. Cliente que trava (travamento, tela azul, cabo puxado sem
+        FIN) nao fecha o TCP: o `receber` do lado do servidor fica bloqueado sem
+        erro, entao a limpeza normal — que so' roda quando `receber` levanta —
+        nunca acontece. Sem isto, o cursor comandado ficava preso no PC morto e o
+        operador perdia o proprio teclado e mouse ate' reiniciar. O watchdog
+        transforma o silencio (sem pong) num retorno automatico ao servidor.
+        """
+        while not self.parar.wait(INTERVALO_WATCHDOG):
+            agora = time.monotonic()
+            with self._lock:
+                mortos = [(nome, conn) for nome, conn in self.clientes.items()
+                          if agora - self.ultimo_pong.get(nome, agora) > TIMEOUT_SEM_RESPOSTA]
+            for nome, conn in mortos:
+                self._derrubar(nome, conn, f"parou de responder ({TIMEOUT_SEM_RESPOSTA:.0f}s sem resposta)")
