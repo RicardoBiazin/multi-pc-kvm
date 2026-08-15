@@ -30,6 +30,12 @@ from cryptography.fernet import Fernet, InvalidToken
 PORTA_PADRAO = 24810
 TAMANHO_MAXIMO = 32 * 1024 * 1024  # teto de sanidade por frame
 _CABECALHO = struct.Struct(">I")
+# Teto de ENVIO (ms). Um par travado enche o buffer TCP e faria o `sendall`
+# pendurar para sempre — prendendo a thread de envio/ping do servidor, o que
+# faria os pings pararem para TODO MUNDO e o watchdog derrubar ate' clientes
+# saudaveis. Com este teto, o envio a um par travado levanta em vez de travar; o
+# recv continua bloqueante de proposito (a thread dele so' vive esperando).
+TIMEOUT_ENVIO_MS = 2000
 
 
 class ErroProtocolo(Exception):
@@ -51,6 +57,12 @@ class Conexao:
         self._lock_envio = threading.Lock()
         self._fechada = False
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # Só o ENVIO ganha teto (ver TIMEOUT_ENVIO_MS). No Windows o SO_SNDTIMEO
+        # e' um DWORD em milissegundos; best-effort para nao quebrar em outros SO.
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, TIMEOUT_ENVIO_MS)
+        except OSError:
+            pass
 
     # -- frames crus ---------------------------------------------------------
 
