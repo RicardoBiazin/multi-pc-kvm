@@ -1,0 +1,48 @@
+name: Release
+
+# A cada tag vX.Y.Z: valida (teste_local headless) e publica um Release com as
+# notas dos commits desde a tag anterior. Sem passo manual.
+#
+# Gate deterministico (compila + importa o core). teste_local.py NAO entra: seu
+# sub-teste de injecao move o mouse de verdade e depende de sessao interativa/DPI,
+# entao seria flaky em CI. teste_injecao.py idem (pendura esperando interacao).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest   # KVM Windows (Win32 via ctypes)
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Instalar cryptography
+        run: pip install "cryptography>=50"
+      - name: Compilar e importar o core (smoke)
+        run: |
+          python -m compileall .
+          python -c "import protocolo, configuracao, descoberta, alvo, arquivos, motor"
+
+      - name: Montar as notas dos commits
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then echo "## Mudanças desde ${PREV}" > NOTES.md; RANGE="${PREV}..${TAG}"; else echo "## Primeiro release" > NOTES.md; RANGE="${TAG}"; fi
+          echo "" >> NOTES.md
+          git log --no-merges --pretty='- %s' "$RANGE" >> NOTES.md
+
+      - name: Publicar o Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file NOTES.md
