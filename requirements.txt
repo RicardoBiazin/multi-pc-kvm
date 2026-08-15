@@ -1,0 +1,3 @@
+# Multi PC - KVM depende do cryptography para a cifra Fernet do trafego de rede
+# (protocolo.py). Piso >=50 fecha advisories conhecidas de versoes antigas.
+cryptography>=50
