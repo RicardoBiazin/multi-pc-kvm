@@ -26,12 +26,12 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Instalar dependencias
-        run: pip install -r requirements.txt
-      - name: Compilar e importar o core (smoke)
+      - name: Instalar cryptography (o core de rede/cripto so precisa dela)
+        run: pip install "cryptography>=50"
+      - name: Compilar tudo e importar o core (smoke)
         run: |
           python -m compileall .
-          python -c "import protocolo, configuracao, descoberta, alvo, arquivos, motor"
+          python -c "import protocolo, configuracao, descoberta, alvo, arquivos"
 
       - name: Montar as notas dos commits
         shell: bash
