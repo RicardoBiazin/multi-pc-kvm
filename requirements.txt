@@ -1,7 +1,12 @@
 # Multi PC - KVM. Dependencias de runtime:
 #  - cryptography: cifra Fernet do trafego de rede (protocolo.py). Piso >=50
 #    fecha advisories conhecidas de versoes antigas.
-#  - pywin32: area de transferencia do Windows (clipboard_win.py, via pywintypes
-#    / win32clipboard). Era usada sem ser declarada.
+#  - pywin32: area de transferencia do Windows (clipboard_win.py: pywintypes,
+#    win32clipboard, win32con).
+#  - Pillow: imagens na area de transferencia (clipboard_win.py).
+#  - pystray: icone na bandeja do sistema (bandeja.py).
+# (PyInstaller so' e' usado no build, em empacotar.py -- nao e' runtime.)
 cryptography>=50
 pywin32>=306
+Pillow>=11
+pystray>=0.19
