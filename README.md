@@ -135,6 +135,11 @@ Cada troca de desktop custa uma partida nova do `.exe`, e um `--onefile`
 extrai o pacote inteiro a cada partida — depois de desbloquear a tela há um
 intervalo até o teclado voltar a atravessar. É o preço de manter um arquivo só.
 
+Arquivos colados de um PC para o outro são gravados no `%APPDATA%` de **quem
+está logado**, e não no de quem está rodando: o agente é SYSTEM, e o `%APPDATA%`
+de SYSTEM é `C:\Windows\system32\config\systemprofile\...`, pasta que o
+usuário não consegue ler. Chegavam inteiros e colar dava acesso negado.
+
 Os agentes ficam num *job object* com `KILL_ON_JOB_CLOSE`: parar a tarefa mata o
 supervisor sem deixar rodar nenhum `finally` dele, e sem o job sobraria um
 agente SYSTEM com os hooks instalados, vivo até o próximo boot e invisível para

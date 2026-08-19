@@ -150,8 +150,32 @@ def mensagens(arquivos: list[pathlib.Path], total: int, identificador: str):
 
 
 def pasta_de_recebidos() -> pathlib.Path:
-    destino = conf.pasta_de_dados() / "recebidos"
-    destino.mkdir(parents=True, exist_ok=True)
+    """Onde os arquivos que chegam sao gravados.
+
+    No `%APPDATA%` de quem vai COLAR, que nem sempre e' o de quem esta'
+    rodando: o agente do inicio automatico e' SYSTEM, e o `%APPDATA%` dele e'
+    `C:\\Windows\\system32\\config\\systemprofile\\...`, pasta que o usuario
+    logado nao consegue ler. Os arquivos chegavam inteiros, o clipboard
+    recebia esses caminhos, e colar no Explorador dava acesso negado -- sem uma
+    linha de erro em lugar nenhum.
+
+    Quando quem roda e' a janela do proprio usuario, `appdata_do_usuario...`
+    devolve None (falta o privilegio SE_TCB) e caimos no caminho de sempre, que
+    ali ja' e' o certo.
+    """
+    base = None
+    try:
+        import sessao_win
+        base = sessao_win.appdata_do_usuario_do_console()
+    except Exception:
+        log.debug("sem o %APPDATA% do usuario do console", exc_info=True)
+    destino = (base / conf.APP_ARQUIVO if base else conf.pasta_de_dados()) \
+        / "recebidos"
+    try:
+        destino.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        destino = conf.pasta_de_dados() / "recebidos"
+        destino.mkdir(parents=True, exist_ok=True)
     return destino
 
 

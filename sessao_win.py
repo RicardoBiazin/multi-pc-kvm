@@ -91,6 +91,47 @@ def meu_desktop() -> str | None:
         return None
 
 
+def appdata_do_usuario_do_console() -> "pathlib.Path | None":
+    """`%APPDATA%` de quem esta' logado no console, visto daqui.
+
+    Existe por causa de um jeito silencioso de nao funcionar: o agente roda
+    como SYSTEM, e o `%APPDATA%` de SYSTEM e'
+    `C:\\Windows\\system32\\config\\systemprofile\\AppData\\Roaming` -- pasta que
+    o usuario logado nao consegue nem ler. Arquivos colados de um PC para o
+    outro chegavam ali, o clipboard recebia esses caminhos, e colar no
+    Explorador dava acesso negado sem que nada no log parecesse errado.
+
+    Devolve None quando nao da' para saber (sem sessao no console, ou sem o
+    privilegio SE_TCB que o WTSQueryUserToken exige -- e' o caso normal quando
+    quem roda e' a janela do proprio usuario, que ja' tem o %APPDATA% certo).
+    """
+    import pathlib
+
+    sessao = sessao_do_console()
+    if sessao is None:
+        return None
+    try:
+        token = win32ts.WTSQueryUserToken(sessao)
+    except Exception:
+        return None
+    try:
+        # Pelo bloco de ambiente, e nao montando "perfil\\AppData\\Roaming" na
+        # mao: o AppData pode estar redirecionado por politica de dominio.
+        ambiente = win32profile.CreateEnvironmentBlock(token, False)
+        caminho = ambiente.get("APPDATA")
+        if not caminho:
+            caminho = str(pathlib.Path(
+                win32profile.GetUserProfileDirectory(token))
+                / "AppData" / "Roaming")
+        return pathlib.Path(caminho)
+    except Exception:
+        log.warning("nao consegui achar o %%APPDATA%% do usuario do console",
+                    exc_info=True)
+        return None
+    finally:
+        token.Close()
+
+
 def _token_do_system_para(sessao: int):
     """Copia primaria do proprio token de SYSTEM, apontada para outra sessao.
 

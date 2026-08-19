@@ -1222,23 +1222,74 @@ def teste_instancia_unica() -> None:
     checar("a trava vale para a maquina toda, nao para a sessao",
            mt.TRAVA.startswith("Global\\"), mt.TRAVA)
 
-    primeira, consegui = mt._tomar_a_trava()
+    # Nome proprio do teste: com o programa aberto nesta maquina, a trava de
+    # verdade esta' tomada -- e' ela funcionando, nao uma falha.
+    nome = mt.TRAVA + "-teste"
+    primeira, consegui = mt._tomar_a_trava(nome)
     checar("o primeiro motor pega a trava", consegui)
     try:
-        _segunda, de_novo = mt._tomar_a_trava()
+        _segunda, de_novo = mt._tomar_a_trava(nome)
         checar("o segundo nao pega", not de_novo)
     finally:
         primeira.Close()
-    terceira, depois = mt._tomar_a_trava()
+    terceira, depois = mt._tomar_a_trava(nome)
     checar("e a trava e' devolvida ao parar", depois)
     if terceira is not None:
         terceira.Close()
+
+    # Sonda informativa na trava de verdade. Sem assercao: o resultado depende
+    # de o programa estar aberto agora, e de este teste rodar elevado ou nao --
+    # um processo comum nem enxerga o mutex que o .exe elevado criou.
+    real, livre = mt._tomar_a_trava()
+    if real is not None:
+        real.Close()
+        print("       (trava de verdade livre)")
+    elif not livre:
+        print("       (trava de verdade tomada: o programa esta' rodando)")
+    else:
+        print("       (trava de verdade inacessivel deste processo)")
 
     # Tipo proprio: quem chama tem de saber diferenciar "ja' esta' rodando" de
     # "configuracao incompleta". Foi a mensagem errada que custou o diagnostico.
     checar("o erro de instancia dupla nao se confunde com config invalido",
            issubclass(mt.JaRodando, Exception)
            and not issubclass(mt.JaRodando, ValueError))
+
+
+def teste_recebidos_do_usuario_certo() -> None:
+    """Arquivo colado tem de cair onde quem cola consegue ler.
+
+    Falha de 19/08/2026: com o inicio automatico ligado, o agente roda como
+    SYSTEM e gravava os arquivos recebidos em
+    C:\Windows\system32\config\systemprofile\AppData\Roaming\...
+    Chegavam inteiros, o clipboard recebia esses caminhos, e colar no
+    Explorador dava acesso negado -- sem uma linha de erro em lugar nenhum.
+    """
+    print("pasta de recebidos (quem cola x quem roda)")
+    import tempfile
+
+    import sessao_win as sw
+
+    salvo = sw.appdata_do_usuario_do_console
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Como SYSTEM: o resolvedor acha o %APPDATA% do usuario do console.
+            sw.appdata_do_usuario_do_console = lambda: pathlib.Path(tmp)
+            destino = arquivos.pasta_de_recebidos()
+            checar("como SYSTEM, grava no %APPDATA% de quem esta' logado",
+                   pathlib.Path(tmp) in destino.parents, str(destino))
+            checar("dentro da pasta do programa, nao solto no perfil",
+                   destino.parent.name == conf.APP_ARQUIVO, destino.parent.name)
+            checar("e a pasta e' criada de verdade", destino.is_dir())
+
+        # Como a janela do proprio usuario: nao ha' privilegio para consultar a
+        # sessao, e o %APPDATA% de sempre ja' e' o certo.
+        sw.appdata_do_usuario_do_console = lambda: None
+        destino = arquivos.pasta_de_recebidos()
+        checar("como usuario comum, segue no %APPDATA% de sempre",
+               destino == conf.pasta_de_dados() / "recebidos", str(destino))
+    finally:
+        sw.appdata_do_usuario_do_console = salvo
 
 
 def main() -> int:
@@ -1267,6 +1318,7 @@ def main() -> int:
     teste_comando_no_servidor()
     teste_inicio_automatico()
     teste_instancia_unica()
+    teste_recebidos_do_usuario_certo()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

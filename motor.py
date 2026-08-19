@@ -36,7 +36,7 @@ class JaRodando(RuntimeError):
     """
 
 
-def _tomar_a_trava():
+def _tomar_a_trava(nome: str = TRAVA):
     """Mutex de instancia unica. Devolve (handle, consegui).
 
     Dois motores nesta maquina instalam dois jogos de hooks de teclado e mouse,
@@ -49,7 +49,7 @@ def _tomar_a_trava():
     Global), seguimos em frente: e' uma trava, nao um requisito.
     """
     try:
-        trava = win32event.CreateMutex(None, True, TRAVA)
+        trava = win32event.CreateMutex(None, True, nome)
     except Exception:
         log.warning("nao consegui criar a trava de instancia unica",
                     exc_info=True)
