@@ -1207,6 +1207,40 @@ def teste_inicio_automatico() -> None:
             conf.pasta_do_executavel = salvo
 
 
+def teste_instancia_unica() -> None:
+    """Dois motores nesta maquina travam o teclado -- e sem dizer por que.
+
+    Aconteceu em 19/08/2026: a janela auto-iniciava pelo `iniciar_ao_abrir` e o
+    inicio automatico subia o segundo servidor por cima. Os dois jogos de hooks
+    se estorvaram, o teclado travou, e o outro PC ficou entrando e saindo numa
+    reconexao sem fim -- `WinError 10038` a cada 3 s no log. Nada apontava a
+    causa. A trava e' o que impede a repeticao.
+    """
+    print("trava de instancia unica")
+    import motor as mt
+
+    checar("a trava vale para a maquina toda, nao para a sessao",
+           mt.TRAVA.startswith("Global\\"), mt.TRAVA)
+
+    primeira, consegui = mt._tomar_a_trava()
+    checar("o primeiro motor pega a trava", consegui)
+    try:
+        _segunda, de_novo = mt._tomar_a_trava()
+        checar("o segundo nao pega", not de_novo)
+    finally:
+        primeira.Close()
+    terceira, depois = mt._tomar_a_trava()
+    checar("e a trava e' devolvida ao parar", depois)
+    if terceira is not None:
+        terceira.Close()
+
+    # Tipo proprio: quem chama tem de saber diferenciar "ja' esta' rodando" de
+    # "configuracao incompleta". Foi a mensagem errada que custou o diagnostico.
+    checar("o erro de instancia dupla nao se confunde com config invalido",
+           issubclass(mt.JaRodando, Exception)
+           and not issubclass(mt.JaRodando, ValueError))
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1232,6 +1266,7 @@ def main() -> int:
     teste_comando_do_cliente()
     teste_comando_no_servidor()
     teste_inicio_automatico()
+    teste_instancia_unica()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

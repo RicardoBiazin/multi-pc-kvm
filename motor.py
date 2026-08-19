@@ -2,6 +2,9 @@
 
 A interface e o modo console falam so' com esta classe -- e' ela que sabe qual
 papel esta' maquina tem, segundo o layout.
+
+E' tambem onde mora a trava de instancia unica: dois motores na mesma maquina
+travam o teclado, e o jeito de descobrir isso e' penoso (ver `_tomar_a_trava`).
 """
 
 from __future__ import annotations
@@ -9,11 +12,52 @@ from __future__ import annotations
 import logging
 import threading
 
+import win32api
+import win32event
+import winerror
+
 import cliente
 import layout as lay
 import servidor
 
 log = logging.getLogger("motor")
+
+# Global e nao Local: o agente do inicio automatico roda na sessao 0 como
+# SYSTEM e a janela na sessao do usuario -- num nome local eles nao se veriam.
+TRAVA = r"Global\MultiPCKVM-motor"
+
+
+class JaRodando(RuntimeError):
+    """Outro motor desta maquina ja' tem a trava.
+
+    Tipo proprio, e nao ValueError junto com "configuracao incompleta": quem
+    chama precisa dizer ao usuario a coisa certa. Foi uma mensagem errada aqui
+    que fez esta falha custar caro para entender.
+    """
+
+
+def _tomar_a_trava():
+    """Mutex de instancia unica. Devolve (handle, consegui).
+
+    Dois motores nesta maquina instalam dois jogos de hooks de teclado e mouse,
+    e disputam a mesma porta: o teclado trava e o outro PC entra e sai numa
+    reconexao sem fim. Aconteceu de verdade -- a janela auto-iniciava pelo
+    `iniciar_ao_abrir` e o inicio automatico subia o segundo servidor por cima.
+    Nenhuma mensagem de erro apontava para a causa.
+
+    Se nem der para criar o mutex (janela sem elevacao nao entra no namespace
+    Global), seguimos em frente: e' uma trava, nao um requisito.
+    """
+    try:
+        trava = win32event.CreateMutex(None, True, TRAVA)
+    except Exception:
+        log.warning("nao consegui criar a trava de instancia unica",
+                    exc_info=True)
+        return None, True
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        trava.Close()
+        return None, False
+    return trava, True
 
 
 class Motor:
@@ -22,6 +66,7 @@ class Motor:
         self.papel: servidor.Servidor | cliente.Cliente | None = None
         self.thread: threading.Thread | None = None
         self.parada = threading.Event()
+        self.trava = None
         self.ao_mudar = lambda: None
         self.ao_trocar = lambda de, para: None
 
@@ -60,6 +105,12 @@ class Motor:
         problemas = lay.Layout.de_config(cfg).validar()
         if problemas:
             raise ValueError("; ".join(problemas))
+        self.trava, consegui = _tomar_a_trava()
+        if not consegui:
+            raise JaRodando(
+                "o programa ja' esta' rodando nesta maquina -- pelo inicio "
+                "automatico ou por outra janela. Dois motores disputam os "
+                "mesmos hooks de teclado e a mesma porta, e nenhum funciona")
         self.cfg = cfg
         self.parada = threading.Event()
 
@@ -93,4 +144,7 @@ class Motor:
         if self.thread is not None:
             self.thread.join(timeout=3)
         self.thread = None
+        if self.trava is not None:
+            self.trava.Close()  # solta a vez para a proxima instancia
+            self.trava = None
         self.ao_mudar()

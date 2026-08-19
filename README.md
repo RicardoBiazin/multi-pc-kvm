@@ -112,6 +112,13 @@ modelo de dois processos deixa de importar. A alternativa seria abandonar o
 `--onefile` e passar a distribuir uma pasta em vez de um arquivo — e copiar
 **um** `.exe` para cada PC é o jeito de instalar este programa.
 
+**Um motor por máquina.** A janela e o início automático não podem rodar juntos:
+dois jogos de hooks disputam o mesmo teclado e a mesma porta, o teclado trava e o
+outro PC entra e sai numa reconexão sem fim. Ligar o início automático **para o
+motor da janela** antes de registrar a tarefa, abrir a janela com a tarefa no ar
+não inicia nada (ela vira só tela de configuração), e um mutex
+`Global\MultiPCKVM-motor` barra qualquer caminho que escape dos dois primeiros.
+
 ### O supervisor e o agente
 
 O supervisor não captura nem injeta nada: ele vive na sessão 0, isolada do

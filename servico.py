@@ -352,6 +352,12 @@ def rodar_agente(cfg: dict) -> int:
     m = motor.Motor(cfg)
     try:
         m.iniciar(cfg)
+    except motor.JaRodando as exc:
+        # A janela esta' com o motor no ar. Nao e' erro de configuracao: o
+        # supervisor tenta de novo daqui a pouco, e quando a janela parar o
+        # agente assume.
+        log.error("%s", exc)
+        return 3
     except ValueError as exc:
         log.error("configuracao incompleta: %s", exc)
         log.error("o inicio automatico le' o config.json ao lado do "

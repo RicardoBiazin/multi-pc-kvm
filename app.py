@@ -154,6 +154,9 @@ def main() -> int:
     m = motor.Motor(cfg)
     try:
         m.iniciar(cfg)
+    except motor.JaRodando as exc:
+        log.error("%s", exc)
+        return 3
     except ValueError as exc:
         log.error("configuracao incompleta: %s", exc)
         log.error("abra o programa sem --sem-janela para configurar")

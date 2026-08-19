@@ -83,7 +83,7 @@ class Janela(tk.Tk):
         self._verificar_rede()
 
         if cfg.get("iniciar_ao_abrir") and not lay.Layout.de_config(cfg).validar():
-            self.after(400, self._iniciar)
+            self.after(400, lambda: self._iniciar(automatico=True))
 
     # -- tema ---------------------------------------------------------------
 
@@ -854,6 +854,15 @@ class Janela(tk.Tk):
             # Roda como SYSTEM: o %APPDATA% dele nao e' o do usuario,
             # e de la' o motor subiria sem layout e sem chave.
             caminho = conf.gravar_ao_lado_do_executavel(self.cfg)
+            # A janela cede o lugar ANTES de ligar a tarefa. Sem isto ficam
+            # dois motores nesta maquina -- e foi o que aconteceu: a janela
+            # auto-inicia pelo 'Conectar ao abrir', a tarefa sobe o segundo
+            # servidor por cima, os dois jogos de hooks se estorvam e o teclado
+            # trava, enquanto o outro PC entra e sai numa reconexao sem fim.
+            if self.motor.ativo():
+                self.motor.parar()
+                self._avisar("parei o motor desta janela: quem manda agora e' "
+                             "o inicio automatico")
             servico.instalar()
             # A entrada velha do registro so' faria dois motores brigarem pelos
             # mesmos hooks depois do login.
@@ -903,10 +912,17 @@ class Janela(tk.Tk):
 
     # -- motor --------------------------------------------------------------
 
-    def _iniciar(self) -> None:
+    def _iniciar(self, automatico: bool = False) -> None:
         if servico.rodando():
             # Dois motores na mesma maquina disputam a porta e os hooks, e
             # nenhum dos dois funciona direito.
+            if automatico:
+                # Abrir a janela para conferir o layout nao pode derrubar o
+                # inicio automatico, nem perguntar nada: quem abriu talvez nem
+                # queira iniciar aqui.
+                self._avisar("o inicio automatico ja' esta' rodando o programa "
+                             "nesta maquina; esta janela e' so' para configurar")
+                return
             if not messagebox.askyesno(
                     conf.APP, "O inicio automatico ja' esta' "
                                 "rodando o programa nesta maquina.\n\nIniciar "
