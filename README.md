@@ -79,6 +79,61 @@ Na coluna *Chave* do painel de rede: **confere** quer dizer que aquele PC está
 com a mesma chave que você; **outra** avisa antes de tentar conectar e falhar.
 A chave em si não trafega no anúncio — só os 8 primeiros dígitos do hash dela.
 
+## Iniciar com o Windows (e na tela de bloqueio)
+
+Marque **Iniciar com o Windows** na janela de configuração. Isso instala um
+serviço (`MultiPCKVM`, conta LocalSystem, início automático) e grava o
+`config.json` **ao lado do executável** — é preciso, porque o serviço roda como
+SYSTEM e o `%APPDATA%` de SYSTEM não é o seu. Desmarcar remove o serviço.
+Instalar e remover pedem Administrador; o `.exe` já roda elevado.
+
+Com o serviço no ar, o programa:
+
+- sobe **no boot**, antes de qualquer login;
+- funciona na **tela de bloqueio**, no Ctrl+Alt+Del e sobre o prompt de UAC;
+- volta sozinho se cair, e acompanha a troca de usuário.
+
+Não é firula de arquitetura — é o único jeito de chegar lá:
+
+| | `HKCU\...\Run` | Serviço |
+|---|---|---|
+| Roda antes do login | não | **sim** |
+| Roda pedindo elevação | **não** — o Windows descarta em silêncio, porque não há como mostrar UAC no logon | sim, é SYSTEM |
+| Alcança o desktop `Winlogon` (tela de bloqueio) | não | **sim** |
+
+O serviço em si não captura nem injeta nada: ele vive na sessão 0, isolada do
+teclado e da tela desde o Vista. Ele é um supervisor — lança o **agente** na
+sessão do console, como SYSTEM, no desktop que está recebendo o teclado, e o
+relança a cada troca:
+
+```
+serviço (sessão 0, SYSTEM)
+  └── agente (sessão do console, SYSTEM, desktop Default)    ← área de trabalho
+  └── agente (sessão do console, SYSTEM, desktop Winlogon)   ← tela de bloqueio
+```
+
+Um processo por desktop porque hook e `SendInput` valem para **um** desktop só,
+e não dá para arrastar um processo com hooks no ar de um para o outro. Quando a
+tela bloqueia, o agente sai com o código 20 deixando por escrito o nome do
+desktop novo (`servico-desktop.txt`, na pasta do programa) e o serviço o faz
+nascer lá. Quem lê o desktop de entrada é o agente, não o serviço: da sessão 0
+não se enxerga o desktop das outras sessões.
+
+O `config.json` ao lado do `.exe` contém a **chave compartilhada** e fica
+legível para quem tem acesso àquela pasta — no `%APPDATA%` era só seu. Se isso
+importar na sua máquina, ponha o `.exe` numa pasta com permissão restrita.
+
+Para conferir ou mexer pela linha de comando:
+
+```
+sc query MultiPCKVM
+sc stop MultiPCKVM
+```
+
+Cada papel escreve seu próprio log (`-servico`, `-agente`): três processos no
+mesmo arquivo embaralhariam justamente o que se lê para entender uma falha de
+início.
+
 ## PC com mais de um monitor
 
 Cada PC ocupa **uma** célula no mapa, mesmo tendo vários monitores: a travessia
@@ -273,6 +328,8 @@ condições.
 ## Limitações conhecidas
 
 - Windows ↔ Windows apenas.
+- Na tela de bloqueio vale o mesmo layout da área de trabalho, mas a área de
+  transferência não atravessa: o desktop `Winlogon` tem a sua, separada.
 - Um servidor; os demais são clientes. Qualquer um deles pode **comandar**, mas
   o roteamento passa sempre pelo servidor: com ele fechado, ninguém comanda.
 - A **porta TCP** tem de ser a mesma em todos os PCs. Se divergir, os PCs se
@@ -291,9 +348,9 @@ condições.
 
 | O quê | Onde |
 |---|---|
-| Log | pasta do programa — `multipc-kvm-<nome do PC>.log` |
+| Log | pasta do programa — `multipc-kvm-<nome do PC>.log`; o serviço e o agente escrevem em `multipc-kvm-servico.log` e `multipc-kvm-<nome>-agente.log` |
 | Relatórios | pasta do programa — `<papel>-<nome do PC>-<data>.txt` |
-| Configuração | `%APPDATA%\MultiPC-KVM\config.json` |
+| Configuração | `%APPDATA%\MultiPC-KVM\config.json` — ou ao lado do `.exe`, que tem prioridade e é o que o serviço lê |
 
 Log e relatórios ficam **ao lado do executável**, que é onde se procura. Se essa
 pasta não aceitar escrita (`.exe` numa pasta protegida, pendrive travado), os
@@ -303,4 +360,5 @@ painel *Registro*, abre a pasta certa nos dois casos.
 
 A configuração continua em `%APPDATA%` para sobreviver à troca do executável;
 um `config.json` colocado ao lado do `.exe` tem prioridade, para levar tudo
-pronto num pendrive.
+pronto num pendrive — e é onde **Iniciar com o Windows** grava a configuração,
+já que o serviço roda como SYSTEM e não lê o `%APPDATA%` do usuário.

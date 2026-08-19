@@ -1098,6 +1098,87 @@ def teste_comando_no_servidor() -> None:
     checar("queda de quem comanda devolve o comando", ctl.comandante == "B")
 
 
+def teste_inicio_automatico() -> None:
+    """O inicio automatico tem de sobreviver ao boot e a tela de bloqueio.
+
+    Dois enganos custaram isso antes, e os dois eram silenciosos:
+
+      * a entrada de `HKCU\\...\\Run` chamava o executavel SEM `--sem-janela`:
+        no melhor caso o logon abriria a janela de configuracao e pararia ali;
+      * e nem chegava a abrir, porque o .exe pede elevacao e o Windows descarta
+        entrada de Run que pede UAC -- nao ha' como mostrar o prompt no logon.
+
+    O caminho de verdade e' o servico. Aqui checamos o que da' para checar sem
+    reiniciar a maquina: as linhas de comando, a leitura do desktop de entrada
+    e o bilhete que o agente deixa para o servico.
+    """
+    print("inicio automatico (servico e desktop de entrada)")
+    import os
+    import tempfile
+
+    import servico as svc
+    import sessao_win as sw
+
+    checar("o comando do registro sobe sem janela",
+           "--sem-janela" in conf._comando_de_inicio(),
+           conf._comando_de_inicio())
+
+    _exe, comando = svc._binario()
+    checar("o servico e' chamado com --servico", "--servico" in comando)
+    _exe, agente = svc.linha_do_agente("Winlogon")
+    checar("o agente recebe o desktop pedido",
+           "--agente" in agente and '--desktop "Winlogon"' in agente, agente)
+
+    # Ler o desktop de entrada e' o que decide relancar ou nao. Se voltasse um
+    # nome diferente do desktop do proprio processo, o agente sairia em laco.
+    entrada = sw.desktop_de_entrada()
+    meu = sw.meu_desktop()
+    checar("da' para ler o desktop de entrada", bool(entrada), str(entrada))
+    checar("e ele bate com o desktop deste processo",
+           bool(entrada) and bool(meu) and entrada.lower() == meu.lower(),
+           f"{entrada} / {meu}")
+    checar("a sessao do console nao e' a sessao 0",
+           sw.sessao_do_console() not in (None, 0), str(sw.sessao_do_console()))
+    checar("o codigo de troca de desktop nao colide com erro comum",
+           sw.SAIDA_TROCOU_DESKTOP not in (0, 1, 2))
+
+    # O bilhete: o servico nao consegue ler o desktop de entrada da sessao 0,
+    # entao quem o le' e' o agente, que deixa o nome por escrito antes de sair.
+    with tempfile.TemporaryDirectory() as tmp:
+        salvo = conf._pasta_de_saida
+        conf._pasta_de_saida = pathlib.Path(tmp)
+        try:
+            checar("sem bilhete, o servico usa o desktop padrao",
+                   svc._ler_desktop() == svc.DESKTOP_PADRAO)
+            svc._gravar_desktop("Winlogon")
+            checar("com bilhete, ele nasce no desktop pedido",
+                   svc._ler_desktop() == "Winlogon")
+            svc._gravar_desktop("")
+            checar("bilhete vazio nao vira desktop invalido",
+                   svc._ler_desktop() == svc.DESKTOP_PADRAO)
+        finally:
+            conf._pasta_de_saida = salvo
+
+    # A config tem de ir para o lado do .exe: o servico roda como SYSTEM e o
+    # %APPDATA% dele nao e' o do usuario -- de la' o motor subiria sem chave.
+    with tempfile.TemporaryDirectory() as tmp:
+        salvo = conf.pasta_do_executavel
+        conf.pasta_do_executavel = lambda: pathlib.Path(tmp)
+        try:
+            destino = conf.gravar_ao_lado_do_executavel(
+                {"chave": "abc", "porta": 24810, "capturar": True})
+            texto = destino.read_text(encoding="utf-8")
+            checar("a config vai para a pasta do executavel",
+                   destino == pathlib.Path(tmp) / "config.json")
+            checar("com a chave que o servico precisa", '"chave"' in texto)
+            checar("e sem o 'capturar', que e' so' da linha de comando",
+                   "capturar" not in texto)
+            checar("o caminho_config passa a preferir esse arquivo",
+                   conf.caminho_config() == destino)
+        finally:
+            conf.pasta_do_executavel = salvo
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1122,6 +1203,7 @@ def main() -> int:
     teste_multi_monitor()
     teste_comando_do_cliente()
     teste_comando_no_servidor()
+    teste_inicio_automatico()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.0.1"
+VERSAO = "2.1.0"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -108,15 +108,21 @@ def nome_de_arquivo(texto: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in texto)
 
 
-def caminho_log(nome_do_pc: str = "") -> pathlib.Path:
+def caminho_log(nome_do_pc: str = "", parte: str = "") -> pathlib.Path:
     """Caminho do log. O nome do PC entra no arquivo na primeira chamada.
 
     Fica fixo depois disso, para o relatorio ler exatamente o log que esta'
     sendo escrito.
+
+    `parte` separa quem escreve: a janela, o `servico` e o `agente` podem estar
+    no ar ao mesmo tempo, e tres processos gravando o mesmo arquivo embaralham
+    justamente o que se vai ler para entender uma falha de inicio.
     """
     global _caminho_log
     if _caminho_log is None:
         sufixo = f"-{nome_de_arquivo(nome_do_pc)}" if nome_do_pc else ""
+        if parte:
+            sufixo += f"-{parte}"
         _caminho_log = pasta_de_saida() / f"{APP_ARQUIVO.lower()}{sufixo}.log"
     return _caminho_log
 
@@ -173,13 +179,41 @@ def salvar(cfg: dict) -> pathlib.Path:
     return caminho
 
 
+def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:
+    """Grava o config.json na pasta do executavel e passa a usar so' ele.
+
+    E' o que faz o servico enxergar a configuracao: ele roda como SYSTEM, e o
+    %APPDATA% de SYSTEM nao e' o do usuario -- de la' o motor subiria sem
+    layout e sem chave. Como `caminho_config` prefere o arquivo ao lado do
+    executavel, a janela e o servico passam a ler o mesmo arquivo.
+
+    O arquivo contem a CHAVE COMPARTILHADA e fica legivel por quem tem acesso
+    a pasta do executavel; o %APPDATA% era so' do usuario.
+    """
+    destino = pasta_do_executavel() / "config.json"
+    gravavel = {k: v for k, v in cfg.items() if k != "capturar"}
+    destino.write_text(json.dumps(gravavel, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    return destino
+
+
 # -- inicio automatico com o Windows ----------------------------------------
 
 
 def _comando_de_inicio() -> str:
+    """Como o Windows chamaria o programa pelo registro.
+
+    O `--sem-janela` nao e' detalhe: sem ele o logon abriria a JANELA DE
+    CONFIGURACAO e ficaria por isso mesmo -- ninguem conectaria nada.
+
+    Vale so' como plano B. O caminho bom e' o servico (ver servico.py): este
+    executavel pede elevacao, e o Windows descarta em silencio entrada de Run
+    que pede elevacao, porque nao ha' como mostrar UAC no logon.
+    """
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
-    return f'"{sys.executable}" "{pasta_do_executavel() / "app.py"}"'
+        return f'"{sys.executable}" --sem-janela'
+    return (f'"{sys.executable}" "{pasta_do_executavel() / "app.py"}" '
+            f'--sem-janela')
 
 
 def inicio_automatico() -> bool:

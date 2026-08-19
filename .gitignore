@@ -16,6 +16,8 @@ config.json
 servidor-*.txt
 cliente-*.txt
 relatorio*.txt
+# Bilhete do agente para o servico: o desktop de entrada da maquina local.
+servico-desktop.txt
 
 __pycache__/
 *.py[cod]

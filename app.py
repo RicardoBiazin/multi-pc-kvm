@@ -8,6 +8,11 @@ so' precisa saber qual da lista e' ela ("Este PC e'").
     MultiPC-KVM.exe --sem-janela    sobe direto pelo config gravado
     MultiPC-KVM.exe --sem-captura   servidor so' com area de transferencia (teste)
 
+Os dois modos abaixo sao chamados pelo Windows, nao por gente (ver servico.py):
+
+    MultiPC-KVM.exe --servico       o servico de inicio automatico (sessao 0)
+    MultiPC-KVM.exe --agente        o motor num desktop, lancado pelo servico
+
 Atalho de panico: Ctrl+Alt+Shift+Esc devolve teclado e mouse ao servidor.
 """
 
@@ -22,9 +27,9 @@ import configuracao as conf
 import entrada_win as ew
 
 
-def configurar_log(nome_do_pc: str, verboso: bool) -> None:
+def configurar_log(nome_do_pc: str, verboso: bool, parte: str = "") -> None:
     manipuladores: list[logging.Handler] = [
-        logging.FileHandler(conf.caminho_log(nome_do_pc), encoding="utf-8")
+        logging.FileHandler(conf.caminho_log(nome_do_pc, parte), encoding="utf-8")
     ]
     if sys.stdout is not None:  # no .exe sem console, stdout nao existe
         manipuladores.append(logging.StreamHandler(sys.stdout))
@@ -44,14 +49,28 @@ def main() -> int:
                         "(o log vai so' para o arquivo)")
     p.add_argument("--sem-captura", action="store_true",
                    help="servidor sem hooks: so' area de transferencia (teste)")
+    p.add_argument("--servico", action="store_true",
+                   help=argparse.SUPPRESS)  # o Windows chama; ver servico.py
+    p.add_argument("--agente", action="store_true",
+                   help=argparse.SUPPRESS)  # o servico chama; ver servico.py
+    p.add_argument("--desktop", default="",
+                   help=argparse.SUPPRESS)  # em que desktop o servico nos pos
     p.add_argument("--relatorio", action="store_true",
                    help="gera o relatorio de diagnostico e sai")
     p.add_argument("-v", "--verboso", action="store_true")
     args = p.parse_args()
 
     # A config vem antes do log: e' dela que sai o nome do PC no arquivo.
+    if args.servico:
+        # Antes de qualquer outra coisa: o SCM da' 30s para o processo se
+        # apresentar, e nada aqui embaixo interessa a quem vive na sessao 0.
+        configurar_log("", args.verboso, "servico")
+        import servico
+        return servico.rodar_como_servico()
+
     cfg = conf.carregar()
-    configurar_log(cfg.get("este_pc", ""), args.verboso)
+    configurar_log(cfg.get("este_pc", ""), args.verboso,
+                   "agente" if args.agente else "")
     ew.ativar_dpi()  # antes de qualquer leitura de coordenada
 
     cfg["capturar"] = not args.sem_captura
@@ -73,6 +92,15 @@ def main() -> int:
     if conf.migrar_inicio_automatico():
         log.info("inicio automatico apontava para a versao anterior "
                  "(2pc_1Kit.exe); passou a apontar para este executavel")
+
+    import servico
+    if servico.instalado() and conf.inicio_automatico():
+        # Sobra da epoca do registro. Nunca chegou a rodar (o Windows descarta
+        # entrada de Run que pede UAC), mas se um dia rodasse seriam dois
+        # motores brigando pelos mesmos hooks depois do login.
+        conf.definir_inicio_automatico(False)
+        log.info("apaguei a entrada antiga de inicio automatico no registro: "
+                 "quem sobe o programa agora e' o servico")
 
     import descoberta as _desc
     import diagnostico
@@ -109,6 +137,11 @@ def main() -> int:
         import descoberta
         farol = descoberta.Farol(descoberta.descritor(cfg))
         farol.start()
+
+    if args.agente:
+        import servico
+        log.info("modo agente, desktop pedido: %s", args.desktop or "?")
+        return servico.rodar_agente(cfg)
 
     if not args.sem_janela:
         import interface

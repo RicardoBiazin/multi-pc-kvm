@@ -21,6 +21,7 @@ import layout as lay
 import motor
 import redes
 import relatorio
+import servico
 import tema as tm
 
 COLUNAS, LINHAS = 6, 4  # tamanho do mapa de posicoes
@@ -285,7 +286,7 @@ class Janela(tk.Tk):
         self.var_auto = tk.BooleanVar()
         ttk.Checkbutton(baixo, text="Conectar ao abrir", variable=self.var_auto,
                         command=self._salvar_silencioso).grid(row=0, column=0)
-        self.var_windows = tk.BooleanVar(value=conf.inicio_automatico())
+        self.var_windows = tk.BooleanVar(value=servico.instalado())
         ttk.Checkbutton(baixo, text="Iniciar com o Windows",
                         variable=self.var_windows,
                         command=self._alternar_windows).grid(row=0, column=1, padx=12)
@@ -829,12 +830,41 @@ class Janela(tk.Tk):
         self._avisar("chave copiada -- cole a mesma chave nos outros PCs")
 
     def _alternar_windows(self) -> None:
+        """Liga/desliga o servico -- nao mais a entrada do registro.
+
+        Pelo registro nao funcionava: este executavel pede elevacao, e o
+        Windows descarta em silencio entrada de Run que pede UAC. E, mesmo que
+        subisse, so' subiria depois do login e nunca alcancaria a tela de
+        bloqueio. O servico sobe no boot, como SYSTEM (ver servico.py).
+        """
         try:
-            conf.definir_inicio_automatico(self.var_windows.get())
-        except OSError as exc:
-            messagebox.showerror(conf.APP, f"Nao consegui alterar o inicio "
-                                             f"automatico:\n{exc}")
-            self.var_windows.set(conf.inicio_automatico())
+            if not self.var_windows.get():
+                servico.remover()
+                conf.definir_inicio_automatico(False)
+                self._avisar("servico de inicio automatico removido")
+                return
+            problemas = self._recolher()
+            if problemas:
+                messagebox.showwarning(
+                    conf.APP, "Corrija antes de ligar o inicio automatico:"
+                                "\n\n- " + "\n- ".join(problemas))
+                self.var_windows.set(False)
+                return
+            conf.salvar(self.cfg)
+            # O servico roda como SYSTEM: o %APPDATA% dele nao e' o do usuario,
+            # e de la' o motor subiria sem layout e sem chave.
+            caminho = conf.gravar_ao_lado_do_executavel(self.cfg)
+            servico.instalar()
+            # A entrada velha do registro so' faria dois motores brigarem pelos
+            # mesmos hooks depois do login.
+            conf.definir_inicio_automatico(False)
+            self._avisar(f"servico instalado; config em {caminho}")
+        except Exception as exc:
+            messagebox.showerror(
+                conf.APP, f"Nao consegui alterar o inicio automatico:\n{exc}"
+                            "\n\nInstalar ou remover o servico exige "
+                            "Administrador.")
+            self.var_windows.set(servico.instalado())
 
     def _recolher(self) -> list[str]:
         """Passa a tela para o cfg. Devolve os problemas encontrados."""
@@ -874,6 +904,23 @@ class Janela(tk.Tk):
     # -- motor --------------------------------------------------------------
 
     def _iniciar(self) -> None:
+        if servico.rodando():
+            # Dois motores na mesma maquina disputam a porta e os hooks, e
+            # nenhum dos dois funciona direito.
+            if not messagebox.askyesno(
+                    conf.APP, "O servico de inicio automatico ja' esta' "
+                                "rodando o programa nesta maquina.\n\nIniciar "
+                                "aqui tambem faria os dois brigarem pela porta "
+                                "e pelos hooks. Parar o servico e iniciar por "
+                                "esta janela?"):
+                return
+            try:
+                servico.remover()
+                self.var_windows.set(False)
+            except Exception as exc:
+                messagebox.showerror(conf.APP,
+                                     f"Nao consegui parar o servico:\n{exc}")
+                return
         problemas = self._recolher()
         if problemas:
             messagebox.showwarning(conf.APP,
