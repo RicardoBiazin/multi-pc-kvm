@@ -230,6 +230,7 @@ class Sincronizador(threading.Thread):
         self._sequencia = None
         self._lock = threading.Lock()
         self._recepcao = arquivos.Recepcao()
+        self._falhas = 0  # ciclos que morreram na excecao, para o log ralear
 
     def aplicar_arquivo(self, msg: dict) -> None:
         """Consome uma mensagem 'arq'. Ao completar, poe os arquivos no clipboard.
@@ -307,12 +308,27 @@ class Sincronizador(threading.Thread):
                 with self._lock:
                     self._sequencia = sequencia
                     if msg is None or marca == self._ultima:
+                        if msg is None:
+                            # Copiaram algo que nao sabemos levar (formato
+                            # proprio de um programa, por exemplo). Fica no
+                            # log: do lado de la' a queixa e' "copiei e nao
+                            # colou", e sem esta linha nao ha' por onde comecar.
+                            log.info("copiaram um formato que nao sei mandar; "
+                                     "nada foi enviado")
                         continue
                     self._ultima = marca
+                self._falhas = 0
                 if msg["fmt"] == "arquivos":
                     self._enviar_arquivos(msg["caminhos"])
                     continue
                 self.enviar(msg)
                 log.info("clipboard enviado (%s)", msg["fmt"])
             except Exception:
-                log.debug("erro no ciclo do clipboard", exc_info=True)
+                # Em DEBUG isto era invisivel, e invisivel e' o pior lugar para
+                # esta falha: o clipboard simplesmente nao atravessa e nao ha'
+                # uma linha sequer a que se agarrar. Ralear o log evita encher
+                # o arquivo quando a causa e' permanente.
+                self._falhas += 1
+                if self._falhas == 1 or self._falhas % 20 == 0:
+                    log.warning("ciclo do clipboard falhou (%da vez); a copia "
+                                "nao atravessou", self._falhas, exc_info=True)
