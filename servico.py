@@ -1,23 +1,34 @@
-"""Servico do Windows que sobe o motor no boot e o mantem no desktop de entrada.
+"""Inicio automatico: sobe o motor no boot e o mantem no desktop de entrada.
 
 O que isto resolve, e que o `Run` do registro nunca resolveu:
 
   1. **Nao subia ao reiniciar.** O executavel pede elevacao (manifest
      `requireAdministrator`, ver MultiPC-KVM.spec). O Windows ignora em
      silencio entrada de `HKCU\\...\\Run` que pede elevacao -- nao ha' como
-     mostrar o prompt de UAC no logon. Um servico roda como LocalSystem: nao
-     ha' prompt nenhum a mostrar.
+     mostrar o prompt de UAC no logon.
   2. **Nao funcionava na tela de bloqueio.** O `Run` so' dispara depois do
-     login, e um processo de usuario nao alcanca o desktop seguro. O servico
-     comeca no boot, antes de qualquer login.
+     login, e um processo de usuario nao alcanca o desktop seguro.
 
-O servico em si nao captura nem injeta nada -- ele vive na sessao 0, onde isso
-seria impossivel (ver sessao_win). Ele e' um supervisor: lanca o **agente** na
-sessao do console, como SYSTEM, no desktop de entrada, e o relanca toda vez que
-o agente sai -- por troca de desktop (a tela bloqueou), por troca de usuario ou
-por erro.
+Quem sobe o programa agora e' uma **tarefa agendada** disparada no boot, rodando
+como SYSTEM (`S-1-5-18`). Nao ha' prompt de UAC a mostrar para SYSTEM, e ela
+comeca antes de qualquer login.
 
-    servico (sessao 0, SYSTEM)
+Por que tarefa e nao um servico de verdade, ja' que a conta e o gatilho seriam
+os mesmos: o `.exe` e' `--onefile`, e nesse modo o bootloader do PyInstaller
+extrai o pacote e roda o Python num processo FILHO. O SCM vigia o processo que
+ele criou -- o pai --, que nunca chama `StartServiceCtrlDispatcher`, e derruba o
+servico em 30s com o erro 1053. Uma tarefa agendada nao exige que o processo se
+apresente a ninguem, entao o modelo de dois processos deixa de importar. A
+alternativa seria abandonar o `--onefile` e passar a distribuir uma pasta em vez
+de um arquivo -- e copiar UM .exe para cada PC e' o jeito de instalar isto.
+
+O supervisor nao captura nem injeta nada: ele vive na sessao 0, isolada do
+teclado e da tela desde o Vista, onde um hook nunca dispara e um SendInput nao
+chega a lugar nenhum. Ele lanca o **agente** na sessao do console, como SYSTEM,
+no desktop que esta' recebendo o teclado, e o relanca toda vez que o agente sai
+-- por troca de desktop (a tela bloqueou), por troca de usuario ou por erro.
+
+    supervisor (sessao 0, SYSTEM)
       |
       +-- agente (sessao do console, SYSTEM, desktop Default)   <- area de trabalho
       +-- agente (sessao do console, SYSTEM, desktop Winlogon)  <- tela de bloqueio
@@ -33,9 +44,9 @@ import pathlib
 import sys
 import threading
 import time
+from xml.sax.saxutils import escape as escapar_xml
 
-import win32service
-import win32serviceutil
+import win32job
 
 import configuracao as conf
 import sessao_win
@@ -43,10 +54,13 @@ import sessao_win
 log = logging.getLogger("servico")
 
 NOME = "MultiPCKVM"
-EXIBICAO = f"{conf.APP} (inicio automatico)"
 DESCRICAO = ("Sobe o Multi PC - KVM no boot e o mantem no desktop de entrada, "
              "para que teclado e mouse compartilhados funcionem antes do login "
              "e na tela de bloqueio.")
+
+# Estado da tarefa, do Agendador (TASK_STATE_RUNNING). O numero e' o mesmo em
+# qualquer idioma do Windows -- ler "Em execucao" da saida do schtasks nao seria.
+TAREFA_RODANDO = 4
 
 DESKTOP_PADRAO = "Default"
 # Se o agente morrer antes disto, tratamos como falha e esperamos antes de
@@ -61,11 +75,11 @@ INTERVALO_DE_VIGIA = 0.3
 
 
 def _arquivo_do_desktop() -> pathlib.Path:
-    """Bilhete do agente para o servico: o nome do desktop de entrada novo.
+    """Bilhete do agente para o supervisor: o nome do desktop de entrada novo.
 
     Nao da' para mandar isso pelo codigo de saida (o nome e' texto, e alem de
     Default e Winlogon existe Screen-saver e o que mais o Windows criar), e o
-    servico nao pode ler o desktop de entrada sozinho: da sessao 0 ele so'
+    supervisor nao pode ler o desktop de entrada sozinho: da sessao 0 ele so'
     enxerga a propria sessao 0.
     """
     return conf.pasta_de_saida() / "servico-desktop.txt"
@@ -86,18 +100,19 @@ def _ler_desktop() -> str:
     return nome or DESKTOP_PADRAO
 
 
-# -- instalacao --------------------------------------------------------------
+# -- a tarefa agendada -------------------------------------------------------
 
 
 def _binario() -> tuple[str, str]:
-    """(executavel, linha de comando) que o Windows vai rodar como servico."""
+    """(executavel, argumentos) que o Windows vai rodar no boot."""
     if getattr(sys, "frozen", False):
-        return sys.executable, f'"{sys.executable}" --servico'
+        return sys.executable, "--servico"
     script = conf.pasta_do_executavel() / "app.py"
-    return sys.executable, f'"{sys.executable}" "{script}" --servico'
+    return sys.executable, f'"{script}" --servico'
 
 
 def linha_do_agente(desktop: str) -> tuple[str, str]:
+    """(executavel, linha de comando completa) do agente num dado desktop."""
     executavel, _ = _binario()
     if getattr(sys, "frozen", False):
         return executavel, f'"{executavel}" --agente --desktop "{desktop}"'
@@ -106,95 +121,148 @@ def linha_do_agente(desktop: str) -> tuple[str, str]:
                         f'--desktop "{desktop}"')
 
 
-def _gerente(acesso=win32service.SC_MANAGER_CONNECT):
-    return win32service.OpenSCManager(None, None, acesso)
+def xml_da_tarefa() -> str:
+    """Definicao da tarefa.
+
+    Os ajustes que nao sao obvios, e sem os quais isto nao serviria:
+
+      * `UserId` S-1-5-18 e `LogonType` 5 -- SYSTEM, sem senha e sem sessao.
+        SID em vez de "SYSTEM" porque o nome da conta e' traduzido.
+      * `ExecutionTimeLimit` PT0S -- sem limite. O padrao mata a tarefa em 3
+        dias, e este programa e' para ficar no ar.
+      * `DisallowStartIfOnBatteries` false -- senao um notebook na bateria
+        simplesmente nao subiria.
+      * `MultipleInstancesPolicy` IgnoreNew -- o Run da instalacao nao pode
+        criar um segundo supervisor ao lado do que ja' esta' no ar.
+    """
+    executavel, argumentos = _binario()
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>{escapar_xml(conf.AUTOR)}</Author>
+    <Description>{escapar_xml(DESCRICAO)}</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>999</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{escapar_xml(executavel)}</Command>
+      <Arguments>{escapar_xml(argumentos)}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"""
+
+
+def _agendador():
+    import win32com.client
+    agendador = win32com.client.Dispatch("Schedule.Service")
+    agendador.Connect()
+    return agendador.GetFolder("\\")
+
+
+def _tarefa():
+    """A tarefa registrada, ou None."""
+    try:
+        return _agendador().GetTask(NOME)
+    except Exception:
+        return None
 
 
 def instalado() -> bool:
-    try:
-        gerente = _gerente()
-    except Exception:
-        return False
-    try:
-        servico = win32service.OpenService(gerente, NOME,
-                                           win32service.SERVICE_QUERY_STATUS)
-        win32service.CloseServiceHandle(servico)
-        return True
-    except Exception:
-        return False
-    finally:
-        win32service.CloseServiceHandle(gerente)
+    return _tarefa() is not None
 
 
 def rodando() -> bool:
+    tarefa = _tarefa()
     try:
-        estado = win32serviceutil.QueryServiceStatus(NOME)[1]
+        return tarefa is not None and tarefa.State == TAREFA_RODANDO
     except Exception:
         return False
-    return estado == win32service.SERVICE_RUNNING
 
 
 def instalar() -> None:
-    """Cria (ou atualiza) o servico e o deixa rodando. Exige Administrador."""
-    _executavel, comando = _binario()
-    gerente = _gerente(win32service.SC_MANAGER_ALL_ACCESS)
-    try:
-        if instalado():
-            servico = win32service.OpenService(gerente, NOME,
-                                               win32service.SERVICE_ALL_ACCESS)
-            win32service.ChangeServiceConfig(
-                servico, win32service.SERVICE_WIN32_OWN_PROCESS,
-                win32service.SERVICE_AUTO_START,
-                win32service.SERVICE_ERROR_NORMAL, comando, None, 0, None,
-                None, None, EXIBICAO)
-        else:
-            servico = win32service.CreateService(
-                gerente, NOME, EXIBICAO, win32service.SERVICE_ALL_ACCESS,
-                win32service.SERVICE_WIN32_OWN_PROCESS,
-                win32service.SERVICE_AUTO_START,
-                win32service.SERVICE_ERROR_NORMAL, comando, None, 0, None,
-                None, None)
-        try:
-            win32service.ChangeServiceConfig2(
-                servico, win32service.SERVICE_CONFIG_DESCRIPTION, DESCRICAO)
-            # Se o servico cair, o Windows o levanta de novo em 5s.
-            win32service.ChangeServiceConfig2(
-                servico, win32service.SERVICE_CONFIG_FAILURE_ACTIONS,
-                {"ResetPeriod": 86400, "RebootMsg": None, "Command": None,
-                 "Actions": [(win32service.SC_ACTION_RESTART, 5000),
-                             (win32service.SC_ACTION_RESTART, 5000),
-                             (win32service.SC_ACTION_RESTART, 30000)]})
-        except Exception:
-            log.warning("descricao/recuperacao do servico nao aplicadas",
-                        exc_info=True)
-        win32service.CloseServiceHandle(servico)
-    finally:
-        win32service.CloseServiceHandle(gerente)
-    log.info("servico %s instalado: %s", NOME, comando)
+    """Registra (ou atualiza) a tarefa e a poe no ar. Exige Administrador."""
+    pasta = _agendador()
+    # 6 = TASK_CREATE_OR_UPDATE, 5 = TASK_LOGON_SERVICE_ACCOUNT.
+    pasta.RegisterTask(NOME, xml_da_tarefa(), 6, None, None, 5)
+    log.info("tarefa %s registrada: %s %s", NOME, *_binario())
     if not rodando():
-        win32serviceutil.StartService(NOME)
+        pasta.GetTask(NOME).Run(None)
 
 
 def remover() -> None:
-    """Para e apaga o servico. Exige Administrador."""
-    if rodando():
+    """Para e apaga a tarefa. Exige Administrador."""
+    tarefa = _tarefa()
+    if tarefa is not None:
         try:
-            win32serviceutil.StopService(NOME)
-            for _ in range(30):
+            tarefa.Stop(0)
+            for _ in range(20):
                 if not rodando():
                     break
-                time.sleep(0.5)
+                time.sleep(0.25)
         except Exception:
-            log.warning("o servico nao parou no pedido", exc_info=True)
-    win32serviceutil.RemoveService(NOME)
-    log.info("servico %s removido", NOME)
+            log.warning("a tarefa nao parou no pedido", exc_info=True)
+        _agendador().DeleteTask(NOME, 0)
+    log.info("tarefa %s removida", NOME)
 
 
-# -- o servico (sessao 0) ----------------------------------------------------
+# -- o supervisor (sessao 0) -------------------------------------------------
+
+
+def _prisao():
+    """Job que leva os agentes junto quando o supervisor morre.
+
+    Parar a tarefa MATA o supervisor -- nenhum `finally` dele roda. Sem isto,
+    desligar o inicio automatico deixaria para tras um agente SYSTEM com os
+    hooks instalados, vivo ate' o proximo boot e invisivel para quem so' olha o
+    Agendador de Tarefas.
+    """
+    job = win32job.CreateJobObject(None, "")
+    info = win32job.QueryInformationJobObject(
+        job, win32job.JobObjectExtendedLimitInformation)
+    info["BasicLimitInformation"]["LimitFlags"] |= \
+        win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    win32job.SetInformationJobObject(
+        job, win32job.JobObjectExtendedLimitInformation, info)
+    return job
 
 
 def supervisionar(parar: threading.Event) -> None:
     """Mantem um agente vivo na sessao do console, no desktop de entrada."""
+    job = _prisao()
     desktop = _ler_desktop()
     while not parar.is_set():
         sessao = sessao_win.sessao_do_console()
@@ -211,6 +279,11 @@ def supervisionar(parar: threading.Event) -> None:
             desktop = DESKTOP_PADRAO  # o desktop anotado pode nem existir mais
             parar.wait(PAUSA_APOS_FALHA)
             continue
+        try:
+            win32job.AssignProcessToJobObject(job, processo)
+        except Exception:
+            log.warning("o agente ficou fora do job; se me matarem a forca ele "
+                        "sobrevive", exc_info=True)
 
         nasceu = time.monotonic()
         codigo = None
@@ -241,33 +314,11 @@ def supervisionar(parar: threading.Event) -> None:
             parar.wait(PAUSA_APOS_FALHA)
 
 
-class Servico(win32serviceutil.ServiceFramework):
-    _svc_name_ = NOME
-    _svc_display_name_ = EXIBICAO
-    _svc_description_ = DESCRICAO
-
-    def __init__(self, args):
-        super().__init__(args)
-        self.parar = threading.Event()
-
-    def SvcStop(self) -> None:
-        self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        self.parar.set()
-
-    def SvcDoRun(self) -> None:
-        try:
-            supervisionar(self.parar)
-        except Exception:
-            log.error("o supervisor parou com erro", exc_info=True)
-            raise
-
-
 def rodar_como_servico() -> int:
-    """Entrega o processo ao SCM. So' faz sentido chamado pelo Windows."""
-    import servicemanager
-    servicemanager.Initialize()
-    servicemanager.PrepareToHostSingle(Servico)
-    servicemanager.StartServiceCtrlDispatcher()
+    """O processo que a tarefa agendada roda no boot. So' sai se o matarem."""
+    log.info("supervisor no ar (sessao do console: %s)",
+             sessao_win.sessao_do_console() or "nenhuma ainda")
+    supervisionar(threading.Event())
     return 0
 
 
@@ -279,7 +330,7 @@ def rodar_agente(cfg: dict) -> int:
 
     Sai com SAIDA_TROCOU_DESKTOP quando a tela bloqueia (ou desbloqueia): hook
     e SendInput valem para um desktop so', entao quem atende o desktop novo tem
-    de ser um processo novo -- o servico o lanca.
+    de ser um processo novo -- o supervisor o lanca.
     """
     import motor
 
@@ -303,9 +354,9 @@ def rodar_agente(cfg: dict) -> int:
         m.iniciar(cfg)
     except ValueError as exc:
         log.error("configuracao incompleta: %s", exc)
-        log.error("o servico le' o config.json ao lado do executavel; abra a "
-                  "janela de configuracao e marque 'Iniciar com o Windows' de "
-                  "novo para grava-lo la'")
+        log.error("o inicio automatico le' o config.json ao lado do "
+                  "executavel; abra a janela de configuracao e marque "
+                  "'Iniciar com o Windows' de novo para grava-lo la'")
         return 2
     try:
         while True:

@@ -81,13 +81,13 @@ A chave em si não trafega no anúncio — só os 8 primeiros dígitos do hash d
 
 ## Iniciar com o Windows (e na tela de bloqueio)
 
-Marque **Iniciar com o Windows** na janela de configuração. Isso instala um
-serviço (`MultiPCKVM`, conta LocalSystem, início automático) e grava o
-`config.json` **ao lado do executável** — é preciso, porque o serviço roda como
-SYSTEM e o `%APPDATA%` de SYSTEM não é o seu. Desmarcar remove o serviço.
-Instalar e remover pedem Administrador; o `.exe` já roda elevado.
+Marque **Iniciar com o Windows** na janela de configuração. Isso registra uma
+tarefa agendada (`MultiPCKVM`, disparada no boot, rodando como **SYSTEM**) e
+grava o `config.json` **ao lado do executável** — é preciso, porque SYSTEM não
+lê o seu `%APPDATA%`. Desmarcar remove a tarefa. Instalar e remover pedem
+Administrador; o `.exe` já roda elevado.
 
-Com o serviço no ar, o programa:
+Com ela no ar, o programa:
 
 - sobe **no boot**, antes de qualquer login;
 - funciona na **tela de bloqueio**, no Ctrl+Alt+Del e sobre o prompt de UAC;
@@ -95,29 +95,50 @@ Com o serviço no ar, o programa:
 
 Não é firula de arquitetura — é o único jeito de chegar lá:
 
-| | `HKCU\...\Run` | Serviço |
+| | `HKCU\...\Run` | Tarefa no boot como SYSTEM |
 |---|---|---|
 | Roda antes do login | não | **sim** |
-| Roda pedindo elevação | **não** — o Windows descarta em silêncio, porque não há como mostrar UAC no logon | sim, é SYSTEM |
+| Roda pedindo elevação | **não** — o Windows descarta em silêncio, porque não há como mostrar UAC no logon | sim, é SYSTEM: não há prompt a mostrar |
 | Alcança o desktop `Winlogon` (tela de bloqueio) | não | **sim** |
 
-O serviço em si não captura nem injeta nada: ele vive na sessão 0, isolada do
-teclado e da tela desde o Vista. Ele é um supervisor — lança o **agente** na
-sessão do console, como SYSTEM, no desktop que está recebendo o teclado, e o
-relança a cada troca:
+### Por que tarefa agendada e não um serviço
+
+A conta e o gatilho seriam os mesmos, mas o `.exe` é `--onefile`: nesse modo o
+bootloader do PyInstaller extrai o pacote e roda o Python num processo **filho**.
+O SCM vigia o processo que ele criou — o pai —, que nunca chama
+`StartServiceCtrlDispatcher`, e derruba o serviço em 30 s com o **erro 1053**.
+Uma tarefa agendada não exige que o processo se apresente a ninguém, então o
+modelo de dois processos deixa de importar. A alternativa seria abandonar o
+`--onefile` e passar a distribuir uma pasta em vez de um arquivo — e copiar
+**um** `.exe` para cada PC é o jeito de instalar este programa.
+
+### O supervisor e o agente
+
+O supervisor não captura nem injeta nada: ele vive na sessão 0, isolada do
+teclado e da tela desde o Vista. Ele lança o **agente** na sessão do console,
+como SYSTEM, no desktop que está recebendo o teclado, e o relança a cada troca:
 
 ```
-serviço (sessão 0, SYSTEM)
+supervisor (sessão 0, SYSTEM)
   └── agente (sessão do console, SYSTEM, desktop Default)    ← área de trabalho
   └── agente (sessão do console, SYSTEM, desktop Winlogon)   ← tela de bloqueio
 ```
 
+Cada troca de desktop custa uma partida nova do `.exe`, e um `--onefile`
+extrai o pacote inteiro a cada partida — depois de desbloquear a tela há um
+intervalo até o teclado voltar a atravessar. É o preço de manter um arquivo só.
+
+Os agentes ficam num *job object* com `KILL_ON_JOB_CLOSE`: parar a tarefa mata o
+supervisor sem deixar rodar nenhum `finally` dele, e sem o job sobraria um
+agente SYSTEM com os hooks instalados, vivo até o próximo boot e invisível para
+quem só olha o Agendador de Tarefas.
+
 Um processo por desktop porque hook e `SendInput` valem para **um** desktop só,
 e não dá para arrastar um processo com hooks no ar de um para o outro. Quando a
 tela bloqueia, o agente sai com o código 20 deixando por escrito o nome do
-desktop novo (`servico-desktop.txt`, na pasta do programa) e o serviço o faz
-nascer lá. Quem lê o desktop de entrada é o agente, não o serviço: da sessão 0
-não se enxerga o desktop das outras sessões.
+desktop novo (`servico-desktop.txt`, na pasta do programa) e o supervisor o faz
+nascer lá. Quem lê o desktop de entrada é o agente, não o supervisor: da sessão
+0 não se enxerga o desktop das outras sessões.
 
 O `config.json` ao lado do `.exe` contém a **chave compartilhada** e fica
 legível para quem tem acesso àquela pasta — no `%APPDATA%` era só seu. Se isso
@@ -126,8 +147,9 @@ importar na sua máquina, ponha o `.exe` numa pasta com permissão restrita.
 Para conferir ou mexer pela linha de comando:
 
 ```
-sc query MultiPCKVM
-sc stop MultiPCKVM
+schtasks /query /tn MultiPCKVM /v /fo list
+schtasks /end   /tn MultiPCKVM
+schtasks /run   /tn MultiPCKVM
 ```
 
 Cada papel escreve seu próprio log (`-servico`, `-agente`): três processos no
@@ -348,9 +370,9 @@ condições.
 
 | O quê | Onde |
 |---|---|
-| Log | pasta do programa — `multipc-kvm-<nome do PC>.log`; o serviço e o agente escrevem em `multipc-kvm-servico.log` e `multipc-kvm-<nome>-agente.log` |
+| Log | pasta do programa — `multipc-kvm-<nome do PC>.log`; o supervisor e o agente escrevem em `multipc-kvm-servico.log` e `multipc-kvm-<nome>-agente.log` |
 | Relatórios | pasta do programa — `<papel>-<nome do PC>-<data>.txt` |
-| Configuração | `%APPDATA%\MultiPC-KVM\config.json` — ou ao lado do `.exe`, que tem prioridade e é o que o serviço lê |
+| Configuração | `%APPDATA%\MultiPC-KVM\config.json` — ou ao lado do `.exe`, que tem prioridade e é o que o início automático lê |
 
 Log e relatórios ficam **ao lado do executável**, que é onde se procura. Se essa
 pasta não aceitar escrita (`.exe` numa pasta protegida, pendrive travado), os
@@ -361,4 +383,4 @@ painel *Registro*, abre a pasta certa nos dois casos.
 A configuração continua em `%APPDATA%` para sobreviver à troca do executável;
 um `config.json` colocado ao lado do `.exe` tem prioridade, para levar tudo
 pronto num pendrive — e é onde **Iniciar com o Windows** grava a configuração,
-já que o serviço roda como SYSTEM e não lê o `%APPDATA%` do usuário.
+já que o supervisor roda como SYSTEM e não lê o `%APPDATA%` do usuário.

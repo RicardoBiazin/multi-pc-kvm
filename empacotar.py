@@ -124,10 +124,11 @@ def main() -> int:
         "--version-file", str(VERSAO_TXT),
         "--distpath", str(saida),
         "--hidden-import", "pystray._win32",
-        # O servico se apresenta ao SCM por estes dois; nenhum aparece num
-        # import no topo de arquivo, entao o PyInstaller nao os acha sozinho e
-        # o --servico morreria no ar so' no PC de destino.
-        "--hidden-import", "servicemanager",
+        # O inicio automatico fala com o Agendador de Tarefas por COM. Nada
+        # disso aparece num import no topo de arquivo, entao o PyInstaller nao
+        # acha sozinho e o checkbox quebraria so' no PC de destino.
+        "--hidden-import", "win32com.client",
+        "--hidden-import", "pythoncom",
         "--hidden-import", "win32timezone",
         "--exclude-module", "pytest",
         str(RAIZ / "app.py"),

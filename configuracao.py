@@ -182,10 +182,10 @@ def salvar(cfg: dict) -> pathlib.Path:
 def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:
     """Grava o config.json na pasta do executavel e passa a usar so' ele.
 
-    E' o que faz o servico enxergar a configuracao: ele roda como SYSTEM, e o
-    %APPDATA% de SYSTEM nao e' o do usuario -- de la' o motor subiria sem
-    layout e sem chave. Como `caminho_config` prefere o arquivo ao lado do
-    executavel, a janela e o servico passam a ler o mesmo arquivo.
+    E' o que faz o inicio automatico enxergar a configuracao: ele roda como
+    SYSTEM, e o %APPDATA% de SYSTEM nao e' o do usuario -- de la' o motor
+    subiria sem layout e sem chave. Como `caminho_config` prefere o arquivo ao
+    lado do executavel, a janela e o supervisor leem o mesmo arquivo.
 
     O arquivo contem a CHAVE COMPARTILHADA e fica legivel por quem tem acesso
     a pasta do executavel; o %APPDATA% era so' do usuario.
@@ -206,9 +206,10 @@ def _comando_de_inicio() -> str:
     O `--sem-janela` nao e' detalhe: sem ele o logon abriria a JANELA DE
     CONFIGURACAO e ficaria por isso mesmo -- ninguem conectaria nada.
 
-    Vale so' como plano B. O caminho bom e' o servico (ver servico.py): este
-    executavel pede elevacao, e o Windows descarta em silencio entrada de Run
-    que pede elevacao, porque nao ha' como mostrar UAC no logon.
+    Vale so' como plano B. O caminho bom e' a tarefa agendada de boot (ver
+    servico.py): este executavel pede elevacao, e o Windows descarta em
+    silencio entrada de Run que pede elevacao, porque nao ha' como mostrar UAC
+    no logon.
     """
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}" --sem-janela'

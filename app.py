@@ -10,8 +10,8 @@ so' precisa saber qual da lista e' ela ("Este PC e'").
 
 Os dois modos abaixo sao chamados pelo Windows, nao por gente (ver servico.py):
 
-    MultiPC-KVM.exe --servico       o servico de inicio automatico (sessao 0)
-    MultiPC-KVM.exe --agente        o motor num desktop, lancado pelo servico
+    MultiPC-KVM.exe --servico       o supervisor do inicio automatico (sessao 0)
+    MultiPC-KVM.exe --agente        o motor num desktop, lancado pelo supervisor
 
 Atalho de panico: Ctrl+Alt+Shift+Esc devolve teclado e mouse ao servidor.
 """
@@ -50,11 +50,11 @@ def main() -> int:
     p.add_argument("--sem-captura", action="store_true",
                    help="servidor sem hooks: so' area de transferencia (teste)")
     p.add_argument("--servico", action="store_true",
-                   help=argparse.SUPPRESS)  # o Windows chama; ver servico.py
+                   help=argparse.SUPPRESS)  # a tarefa chama; ver servico.py
     p.add_argument("--agente", action="store_true",
-                   help=argparse.SUPPRESS)  # o servico chama; ver servico.py
+                   help=argparse.SUPPRESS)  # o supervisor chama; ver servico.py
     p.add_argument("--desktop", default="",
-                   help=argparse.SUPPRESS)  # em que desktop o servico nos pos
+                   help=argparse.SUPPRESS)  # em que desktop nos puseram
     p.add_argument("--relatorio", action="store_true",
                    help="gera o relatorio de diagnostico e sai")
     p.add_argument("-v", "--verboso", action="store_true")
@@ -62,8 +62,8 @@ def main() -> int:
 
     # A config vem antes do log: e' dela que sai o nome do PC no arquivo.
     if args.servico:
-        # Antes de qualquer outra coisa: o SCM da' 30s para o processo se
-        # apresentar, e nada aqui embaixo interessa a quem vive na sessao 0.
+        # Antes de qualquer outra coisa: nada aqui embaixo -- DPI, monitores,
+        # placas de rede -- diz respeito a quem vive na sessao 0.
         configurar_log("", args.verboso, "servico")
         import servico
         return servico.rodar_como_servico()
@@ -94,13 +94,15 @@ def main() -> int:
                  "(2pc_1Kit.exe); passou a apontar para este executavel")
 
     import servico
-    if servico.instalado() and conf.inicio_automatico():
+    # So' a janela faz essa limpeza: o agente roda como SYSTEM e nao tem nada
+    # que consultar o Agendador de Tarefas por COM a cada nascimento.
+    if not args.agente and servico.instalado() and conf.inicio_automatico():
         # Sobra da epoca do registro. Nunca chegou a rodar (o Windows descarta
         # entrada de Run que pede UAC), mas se um dia rodasse seriam dois
         # motores brigando pelos mesmos hooks depois do login.
         conf.definir_inicio_automatico(False)
         log.info("apaguei a entrada antiga de inicio automatico no registro: "
-                 "quem sobe o programa agora e' o servico")
+                 "quem sobe o programa agora e' a tarefa agendada")
 
     import descoberta as _desc
     import diagnostico

@@ -1124,10 +1124,38 @@ def teste_inicio_automatico() -> None:
            conf._comando_de_inicio())
 
     _exe, comando = svc._binario()
-    checar("o servico e' chamado com --servico", "--servico" in comando)
+    checar("o supervisor e' chamado com --servico", "--servico" in comando)
     _exe, agente = svc.linha_do_agente("Winlogon")
     checar("o agente recebe o desktop pedido",
            "--agente" in agente and '--desktop "Winlogon"' in agente, agente)
+
+    # A tarefa agendada. Cada ajuste aqui ja' foi um jeito de nao funcionar:
+    # sem BootTrigger nao sobe antes do login; sem SYSTEM nao alcanca o desktop
+    # seguro; com o ExecutionTimeLimit padrao o Windows mata tudo em 3 dias.
+    import xml.etree.ElementTree as ET
+    NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+    arvore = ET.fromstring(svc.xml_da_tarefa().replace('encoding="UTF-16"',
+                                                       'encoding="UTF-8"'))
+
+    def campo(caminho: str) -> str:
+        achado = arvore.find(f".//t:{caminho}", NS)
+        return "" if achado is None else (achado.text or "")
+
+    checar("a tarefa dispara no boot",
+           arvore.find(".//t:BootTrigger", NS) is not None)
+    checar("como SYSTEM, pelo SID (o nome da conta e' traduzido)",
+           campo("UserId") == "S-1-5-18", campo("UserId"))
+    checar("com privilegio maximo",
+           campo("RunLevel") == "HighestAvailable")
+    checar("sem limite de tempo de execucao",
+           campo("ExecutionTimeLimit") == "PT0S", campo("ExecutionTimeLimit"))
+    checar("e roda na bateria tambem",
+           campo("DisallowStartIfOnBatteries") == "false")
+    checar("nao empilha um segundo supervisor",
+           campo("MultipleInstancesPolicy") == "IgnoreNew")
+    checar("a acao e' o executavel com --servico",
+           campo("Command") and "--servico" in campo("Arguments"),
+           f"{campo('Command')} {campo('Arguments')}")
 
     # Ler o desktop de entrada e' o que decide relancar ou nao. Se voltasse um
     # nome diferente do desktop do proprio processo, o agente sairia em laco.

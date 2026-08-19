@@ -830,18 +830,18 @@ class Janela(tk.Tk):
         self._avisar("chave copiada -- cole a mesma chave nos outros PCs")
 
     def _alternar_windows(self) -> None:
-        """Liga/desliga o servico -- nao mais a entrada do registro.
+        """Liga/desliga a tarefa de boot -- nao mais a entrada do registro.
 
         Pelo registro nao funcionava: este executavel pede elevacao, e o
         Windows descarta em silencio entrada de Run que pede UAC. E, mesmo que
         subisse, so' subiria depois do login e nunca alcancaria a tela de
-        bloqueio. O servico sobe no boot, como SYSTEM (ver servico.py).
+        bloqueio. A tarefa sobe no boot, como SYSTEM (ver servico.py).
         """
         try:
             if not self.var_windows.get():
                 servico.remover()
                 conf.definir_inicio_automatico(False)
-                self._avisar("servico de inicio automatico removido")
+                self._avisar("inicio automatico desligado")
                 return
             problemas = self._recolher()
             if problemas:
@@ -851,18 +851,18 @@ class Janela(tk.Tk):
                 self.var_windows.set(False)
                 return
             conf.salvar(self.cfg)
-            # O servico roda como SYSTEM: o %APPDATA% dele nao e' o do usuario,
+            # Roda como SYSTEM: o %APPDATA% dele nao e' o do usuario,
             # e de la' o motor subiria sem layout e sem chave.
             caminho = conf.gravar_ao_lado_do_executavel(self.cfg)
             servico.instalar()
             # A entrada velha do registro so' faria dois motores brigarem pelos
             # mesmos hooks depois do login.
             conf.definir_inicio_automatico(False)
-            self._avisar(f"servico instalado; config em {caminho}")
+            self._avisar(f"inicio automatico ligado; config em {caminho}")
         except Exception as exc:
             messagebox.showerror(
                 conf.APP, f"Nao consegui alterar o inicio automatico:\n{exc}"
-                            "\n\nInstalar ou remover o servico exige "
+                            "\n\nLigar ou desligar o inicio automatico exige "
                             "Administrador.")
             self.var_windows.set(servico.instalado())
 
@@ -908,10 +908,11 @@ class Janela(tk.Tk):
             # Dois motores na mesma maquina disputam a porta e os hooks, e
             # nenhum dos dois funciona direito.
             if not messagebox.askyesno(
-                    conf.APP, "O servico de inicio automatico ja' esta' "
+                    conf.APP, "O inicio automatico ja' esta' "
                                 "rodando o programa nesta maquina.\n\nIniciar "
                                 "aqui tambem faria os dois brigarem pela porta "
-                                "e pelos hooks. Parar o servico e iniciar por "
+                                "e pelos hooks. Desligar o inicio automatico e "
+                                "iniciar por "
                                 "esta janela?"):
                 return
             try:
@@ -919,7 +920,8 @@ class Janela(tk.Tk):
                 self.var_windows.set(False)
             except Exception as exc:
                 messagebox.showerror(conf.APP,
-                                     f"Nao consegui parar o servico:\n{exc}")
+                                     f"Nao consegui desligar o inicio "
+                                     f"automatico:\n{exc}")
                 return
         problemas = self._recolher()
         if problemas:
