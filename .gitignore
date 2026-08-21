@@ -21,3 +21,6 @@ servico-desktop.txt
 
 __pycache__/
 *.py[cod]
+
+# Ambiente virtual do projeto (nunca versionar)
+.venv/

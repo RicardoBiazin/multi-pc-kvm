@@ -1,12 +1,24 @@
 # Multi PC - KVM. Dependencias de runtime:
-#  - cryptography: cifra Fernet do trafego de rede (protocolo.py). Piso >=50
-#    fecha advisories conhecidas de versoes antigas.
+#  - cryptography: cifra Fernet do trafego de rede (protocolo.py).
+#
+# VERSOES FIXAS (21/08/2026), e o motivo importa. Antes eram faixas, e faixa
+# nao e' consultavel: o OSV precisa de versao concreta para dizer se ha' CVE.
+# O relatorio de seguranca mostrava '0 CVE' quando NADA tinha sido medido --
+# e havia o que medir: a maquina rodava cryptography 46.0.7, com 7
+# vulnerabilidades conhecidas (OpenSSL vulneravel embutido no wheel, oraculo
+# Bleichenbacher em PKCS#7, path-building exponencial). O piso '>=50' que
+# estava aqui era correto na intencao e simplesmente NAO ERA CUMPRIDO pelo
+# ambiente. Pino resolve as duas coisas: passa a ser verificavel e nao
+# silencia mais.
+#
+# .venv/ deste projeto tem as versoes abaixo, e teste_local.py passa com elas.
+# Ao subir qualquer uma: rode teste_local.py e `raptor-win --sca` antes.
 #  - pywin32: area de transferencia do Windows (clipboard_win.py: pywintypes,
 #    win32clipboard, win32con).
 #  - Pillow: imagens na area de transferencia (clipboard_win.py).
 #  - pystray: icone na bandeja do sistema (bandeja.py).
 # (PyInstaller so' e' usado no build, em empacotar.py -- nao e' runtime.)
-cryptography>=50
-pywin32>=306
-Pillow>=11
-pystray>=0.19
+cryptography==50.0.0
+pywin32==311
+Pillow==12.3.0
+pystray==0.19.5
