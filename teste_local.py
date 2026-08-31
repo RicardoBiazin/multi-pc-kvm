@@ -1355,6 +1355,51 @@ def teste_reenvio_apos_falha_de_envio() -> None:
                 pass
 
 
+def teste_leitura_com_paciencia() -> None:
+    """Uma olhada so' no clipboard perde copia de programa que publica em etapas.
+
+    Visto no log em 31/08/2026: "copiaram um formato que nao sei mandar" e, no
+    MESMO segundo, "clipboard enviado (texto)" -- tinhamos pego o meio da
+    publicacao. Ali recuperou porque houve um segundo SetClipboardData mexendo
+    na sequencia; quando nao ha', a sequencia ja' foi confirmada e a copia se
+    perde inteira.
+    """
+    print("leitura do clipboard com paciencia")
+    olhadas = [0]
+
+    def ler_que_demora_a_aparecer():
+        olhadas[0] += 1
+        if olhadas[0] < 3:
+            return None  # o programa ainda nao publicou o texto
+        return {"t": "clip", "fmt": "texto", "dados": "chegou na terceira"}
+
+    sinc = cw.Sincronizador(lambda _m: None, threading.Event())
+    salvo = cw.ler
+    try:
+        cw.ler = ler_que_demora_a_aparecer
+        msg = sinc._ler_com_paciencia()
+        checar("insiste ate' o conteudo aparecer",
+               msg is not None and msg["dados"] == "chegou na terceira",
+               f"{olhadas[0]} olhada(s)")
+
+        olhadas[0] = 0
+        cw.ler = lambda: None  # formato que realmente nao sabemos levar
+        checar("mas desiste quando nao ha' o que levar",
+               sinc._ler_com_paciencia() is None)
+        checar("sem insistir para sempre",
+               olhadas[0] == 0 and cw.TENTATIVAS_DE_LEITURA <= 8,
+               f"teto de {cw.TENTATIVAS_DE_LEITURA} olhadas")
+    finally:
+        cw.ler = salvo
+
+    # O log tem de dizer O QUE foi copiado; "nao sei mandar" sozinho nao leva
+    # a lugar nenhum.
+    cw.escrever({"t": "clip", "fmt": "texto", "dados": "sonda de formatos"})
+    formatos = cw.formatos_no_clipboard()
+    checar("os formatos do clipboard saem por nome",
+           "CF_UNICODETEXT" in formatos, ", ".join(formatos))
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1383,6 +1428,7 @@ def main() -> int:
     teste_instancia_unica()
     teste_recebidos_do_usuario_certo()
     teste_reenvio_apos_falha_de_envio()
+    teste_leitura_com_paciencia()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

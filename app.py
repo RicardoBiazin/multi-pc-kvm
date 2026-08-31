@@ -36,7 +36,12 @@ def configurar_log(nome_do_pc: str, verboso: bool, parte: str = "") -> None:
     logging.basicConfig(
         level=logging.DEBUG if verboso else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)-10s %(message)s",
-        datefmt="%H:%M:%S",
+        # Com data: o programa agora fica dias no ar como tarefa de boot, e sem
+        # ela duas linhas do mesmo horario em dias diferentes sao
+        # indistinguiveis. Custou caro uma vez: comparando o log dos dois PCs
+        # para achar uma falha de clipboard, linhas de dias diferentes pareciam
+        # a mesma tarde e a conclusao saiu errada.
+        datefmt="%Y-%m-%d %H:%M:%S",
         handlers=manipuladores,
     )
     logging.getLogger("PIL").setLevel(logging.WARNING)

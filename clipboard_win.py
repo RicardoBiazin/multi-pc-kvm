@@ -29,6 +29,14 @@ log = logging.getLogger("clipboard")
 
 TETO_IMAGEM = 8 * 1024 * 1024  # PNG maior que isso e' descartado
 INTERVALO = 0.3  # segundos entre verificacoes
+# Publicar no clipboard nao e' atomico para quem observa: da' para pegar o
+# instante em que so' os formatos proprios do programa entraram e o texto
+# ainda nao. Visto no log de 31/08/2026 -- "formato que nao sei mandar" e,
+# no MESMO segundo, o texto chegando. Naquela vez recuperou porque o segundo
+# SetClipboardData mexeu na sequencia de novo; quando nao mexe, a copia se
+# perde inteira e para quem copiou o programa simplesmente parou.
+TENTATIVAS_DE_LEITURA = 5
+ESPERA_ENTRE_LEITURAS = 0.15
 
 
 # O clipboard aberto pertence ao *processo*, nao a' thread: se a thread de rede
@@ -95,6 +103,45 @@ def _png_para_dib(png: bytes) -> bytes:
     saida = io.BytesIO()
     imagem.save(saida, "BMP")
     return saida.getvalue()[14:]  # remove o BITMAPFILEHEADER
+
+
+# Nomes dos formatos padrao, para o log dizer O QUE foi copiado quando nao
+# soubermos levar. Sem isto a linha "nao sei mandar" nao leva a lugar nenhum.
+_FORMATOS_PADRAO = {
+    win32con.CF_TEXT: "CF_TEXT",
+    win32con.CF_BITMAP: "CF_BITMAP",
+    win32con.CF_METAFILEPICT: "CF_METAFILEPICT",
+    win32con.CF_OEMTEXT: "CF_OEMTEXT",
+    win32con.CF_DIB: "CF_DIB",
+    win32con.CF_PALETTE: "CF_PALETTE",
+    win32con.CF_UNICODETEXT: "CF_UNICODETEXT",
+    win32con.CF_ENHMETAFILE: "CF_ENHMETAFILE",
+    win32con.CF_HDROP: "CF_HDROP",
+    win32con.CF_LOCALE: "CF_LOCALE",
+    win32con.CF_DIBV5: "CF_DIBV5",
+}
+
+
+def formatos_no_clipboard() -> list[str]:
+    """O que esta' no clipboard agora, por nome. So' para o log."""
+    nomes: list[str] = []
+    try:
+        with _Aberto(tentativas=3):
+            formato = 0
+            while True:
+                formato = wcb.EnumClipboardFormats(formato)
+                if not formato:
+                    break
+                nome = _FORMATOS_PADRAO.get(formato)
+                if nome is None:
+                    try:
+                        nome = wcb.GetClipboardFormatName(formato)
+                    except Exception:
+                        nome = f"#{formato}"
+                nomes.append(nome)
+    except Exception:
+        log.debug("nao consegui listar os formatos", exc_info=True)
+    return nomes
 
 
 # -- leitura / escrita ------------------------------------------------------
@@ -304,6 +351,24 @@ class Sincronizador(threading.Thread):
         finally:
             log.info("sincronizador do clipboard encerrado")
 
+    def _ler_com_paciencia(self) -> dict | None:
+        """Le o clipboard dando tempo a quem esta' publicando.
+
+        Uma olhada so' pega o meio da publicacao e devolve None; dai' a
+        sequencia e' confirmada e a copia se perde para sempre. Reler algumas
+        vezes custa alguns centesimos e resolve o caso comum, que e' o programa
+        publicar o formato dele primeiro e o texto logo depois.
+        """
+        for n in range(TENTATIVAS_DE_LEITURA):
+            msg = ler()
+            if msg is not None:
+                if n:
+                    log.debug("clipboard so' ficou legivel na %da olhada", n + 1)
+                return msg
+            if n < TENTATIVAS_DE_LEITURA - 1:
+                time.sleep(ESPERA_ENTRE_LEITURAS)
+        return None
+
     def _laco(self) -> None:
         while not self.parar.wait(INTERVALO):
             try:
@@ -313,7 +378,7 @@ class Sincronizador(threading.Thread):
                         continue
                 # A sequencia so' e' confirmada depois de uma leitura que deu
                 # certo -- senao uma falha transitoria perderia a mudanca.
-                msg = ler()
+                msg = self._ler_com_paciencia()
                 marca = impressao(msg) if msg is not None else None
                 with self._lock:
                     self._sequencia = sequencia
@@ -324,7 +389,9 @@ class Sincronizador(threading.Thread):
                             # log: do lado de la' a queixa e' "copiei e nao
                             # colou", e sem esta linha nao ha' por onde comecar.
                             log.info("copiaram um formato que nao sei mandar; "
-                                     "nada foi enviado")
+                                     "nada foi enviado (no clipboard: %s)",
+                                     ", ".join(formatos_no_clipboard())
+                                     or "nada")
                         continue
                     anterior = self._ultima
                     self._ultima = marca
