@@ -295,6 +295,16 @@ class Sincronizador(threading.Thread):
 
     def run(self) -> None:
         self._sequencia = wcb.GetClipboardSequenceNumber()
+        # Nascimento e morte no log porque "o clipboard parou" quase sempre e'
+        # esta thread nao estando no ar -- no cliente ela e' de UMA conexao, e
+        # cada queda leva a dela junto.
+        log.info("sincronizador do clipboard no ar")
+        try:
+            self._laco()
+        finally:
+            log.info("sincronizador do clipboard encerrado")
+
+    def _laco(self) -> None:
         while not self.parar.wait(INTERVALO):
             try:
                 sequencia = wcb.GetClipboardSequenceNumber()
@@ -316,13 +326,27 @@ class Sincronizador(threading.Thread):
                             log.info("copiaram um formato que nao sei mandar; "
                                      "nada foi enviado")
                         continue
+                    anterior = self._ultima
                     self._ultima = marca
+                try:
+                    if msg["fmt"] == "arquivos":
+                        self._enviar_arquivos(msg["caminhos"])
+                    else:
+                        self.enviar(msg)
+                        log.info("clipboard enviado (%s)", msg["fmt"])
+                except Exception:
+                    # A impressao VOLTA a ser a de antes. Sem isto, um envio
+                    # que falha (a conexao caiu no exato momento) deixa gravada
+                    # a impressao do que nao foi -- e copiar A MESMA COISA de
+                    # novo, que e' o que a pessoa faz quando percebe que nao
+                    # colou, bate com essa impressao e e' ignorado. Para o
+                    # usuario o clipboard simplesmente "parou de funcionar", e
+                    # so' volta quando ele copia outra coisa qualquer.
+                    with self._lock:
+                        if self._ultima == marca:
+                            self._ultima = anterior
+                    raise
                 self._falhas = 0
-                if msg["fmt"] == "arquivos":
-                    self._enviar_arquivos(msg["caminhos"])
-                    continue
-                self.enviar(msg)
-                log.info("clipboard enviado (%s)", msg["fmt"])
             except Exception:
                 # Em DEBUG isto era invisivel, e invisivel e' o pior lugar para
                 # esta falha: o clipboard simplesmente nao atravessa e nao ha'

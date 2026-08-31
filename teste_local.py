@@ -1292,6 +1292,69 @@ def teste_recebidos_do_usuario_certo() -> None:
         sw.appdata_do_usuario_do_console = salvo
 
 
+def teste_reenvio_apos_falha_de_envio() -> None:
+    """Copiar a MESMA coisa de novo tem de funcionar depois de um envio falho.
+
+    E' a queixa "o clipboard para de funcionar". O poller gravava a impressao
+    do conteudo ANTES de mandar; se o envio falhava (a conexao caiu naquele
+    instante), a impressao do que nao foi ficava gravada. Copiar a mesma coisa
+    de novo -- que e' exatamente o que a pessoa faz quando percebe que nao
+    colou -- batia com essa impressao e era ignorado. Para sempre, ate' copiar
+    outra coisa qualquer.
+    """
+    print("reenvio depois de um envio que falhou")
+    enviados: list[dict] = []
+    falhar = [True]
+
+    def enviar(msg: dict) -> None:
+        if falhar[0]:
+            raise OSError("a conexao caiu bem agora")
+        enviados.append(msg)
+
+    def copiar(texto: str) -> None:
+        cw.escrever({"t": "clip", "fmt": "texto", "dados": texto})
+
+    def esperar(condicao, prazo: float = 6.0) -> bool:
+        limite = time.time() + prazo
+        while time.time() < limite:
+            if condicao():
+                return True
+            time.sleep(0.1)
+        return False
+
+    guardado = None
+    try:
+        guardado = cw.ler()
+    except Exception:
+        pass
+
+    parar = threading.Event()
+    sinc = cw.Sincronizador(enviar, parar)
+    sinc.start()
+    try:
+        texto = f"kvm-teste-{int(time.time())}"
+        copiar(texto)
+        checar("o envio falho e' percebido", esperar(lambda: sinc._falhas >= 1),
+               f"falhas={sinc._falhas}")
+        checar("e a impressao do que nao foi NAO fica gravada",
+               sinc._ultima is None, str(sinc._ultima)[:16])
+
+        # A pessoa copia a mesma coisa de novo; agora a conexao esta' de pe'.
+        falhar[0] = False
+        copiar(texto)
+        checar("copiar o mesmo texto de novo agora atravessa",
+               esperar(lambda: any(m.get("dados") == texto for m in enviados)),
+               f"{len(enviados)} enviado(s)")
+    finally:
+        parar.set()
+        sinc.join(timeout=3)
+        if guardado is not None:
+            try:
+                cw.escrever(guardado)  # devolve o clipboard de quem rodou
+            except Exception:
+                pass
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1319,6 +1382,7 @@ def main() -> int:
     teste_inicio_automatico()
     teste_instancia_unica()
     teste_recebidos_do_usuario_certo()
+    teste_reenvio_apos_falha_de_envio()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")
