@@ -177,6 +177,10 @@ schtasks /end   /tn MultiPCKVM
 schtasks /run   /tn MultiPCKVM
 ```
 
+As travessias de cursor ficam em DEBUG: são várias por segundo e afogavam o
+painel *Registro*. Rode com `--verboso` para trazê-las de volta. Quedas, recusas
+de handshake e erros continuam no nível normal.
+
 Cada papel escreve seu próprio log (`-servico`, `-agente`): três processos no
 mesmo arquivo embaralhariam justamente o que se lê para entender uma falha de
 início.

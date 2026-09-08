@@ -1489,6 +1489,54 @@ def teste_identidade_herdada() -> None:
            conf.corrigir_identidade({"este_pc": "X", "pcs": []}) == "")
 
 
+def teste_registro_sem_ruido() -> None:
+    """O painel Registro nao pode ser afogado pelas travessias.
+
+    Sao varias por segundo enquanto se trabalha. Em 08/09/2026 elas encheram o
+    painel e o arquivo, e atrapalharam um diagnostico de verdade. Foram para
+    DEBUG -- o que importa (quedas, recusas, erros) continua em INFO/WARNING.
+    """
+    print("registro sem o ruido das travessias")
+    import logging as lg
+
+    class Coletor(lg.Handler):
+        def __init__(self):
+            super().__init__()
+            self.linhas: list[str] = []
+
+        def emit(self, registro):
+            self.linhas.append(registro.getMessage())
+
+    coletor = Coletor()
+    raiz = lg.getLogger()
+    nivel = raiz.level
+    raiz.addHandler(coletor)
+    raiz.setLevel(lg.INFO)
+    try:
+        bd = lg.getLogger("borda")
+        bd.debug("cursor -> PC-esq (entrando pela direita, rel=0.32)")
+        bd.info("uma queda de verdade")
+        bd.warning("um aviso de verdade")
+        checar("travessia nao aparece no nivel normal",
+               not any("cursor ->" in l for l in coletor.linhas),
+               str(coletor.linhas))
+        checar("mas o que importa continua aparecendo",
+               len(coletor.linhas) == 2, str(coletor.linhas))
+
+        coletor.linhas.clear()
+        raiz.setLevel(lg.DEBUG)  # e' o que --verboso faz
+        bd.debug("cursor -> PC-esq (entrando pela direita, rel=0.32)")
+        checar("e com --verboso as travessias voltam",
+               any("cursor ->" in l for l in coletor.linhas))
+    finally:
+        raiz.removeHandler(coletor)
+        raiz.setLevel(nivel)
+
+    fonte = pathlib.Path("borda.py").read_text(encoding="utf-8")
+    checar("nenhuma travessia ficou em INFO",
+           'log.info("cursor -> ' not in fonte)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1520,6 +1568,7 @@ def main() -> int:
     teste_leitura_com_paciencia()
     teste_leitura_por_ole()
     teste_identidade_herdada()
+    teste_registro_sem_ruido()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

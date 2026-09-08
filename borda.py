@@ -111,12 +111,12 @@ class Controle:
             # so' largar o bloqueio e devolver o mouse local.
             self.enfileirar(pc.nome, {"t": "devolver", "de": aresta_de_chegada,
                                       "rel": rel})
-            log.info("cursor -> %s (de volta a quem comanda, pela %s)",
+            log.debug("cursor -> %s (de volta a quem comanda, pela %s)",
                      pc.nome, aresta_de_chegada)
         else:
             self.enfileirar(pc.nome, {"t": "entrar", "de": aresta_de_chegada,
                                       "rel": rel})
-            log.info("cursor -> %s (entrando pela %s, rel=%.2f)",
+            log.debug("cursor -> %s (entrando pela %s, rel=%.2f)",
                      pc.nome, aresta_de_chegada, rel)
         self._anunciar_troca(anterior, pc.nome)
 
@@ -142,7 +142,7 @@ class Controle:
                                     self.largura, self.altura, MARGEM,
                                     self.monitores)
         ew.mover_cursor(int(x), int(y))
-        log.info("cursor -> %s (%s)", self.eu, motivo)
+        log.debug("cursor -> %s (%s)", self.eu, motivo)
         self._anunciar_troca(anterior, self.eu)
 
     def _virar_alvo(self, aresta_de_chegada: str, rel: float,
@@ -161,7 +161,7 @@ class Controle:
         self._liberado_em = time.monotonic()
         x, y = self.alvo.entrar(aresta_de_chegada, rel)
         self.enfileirar(LOCAL, {"t": "por_cursor", "x": x, "y": y})
-        log.info("cursor -> %s (%s, comandado por '%s')", self.eu, motivo,
+        log.debug("cursor -> %s (%s, comandado por '%s')", self.eu, motivo,
                  self.comandante)
         self._anunciar_troca(anterior, self.eu)
 
@@ -179,7 +179,7 @@ class Controle:
         self._liberado_em = time.monotonic()
         self.alvo.parar()
         ew.mover_cursor(*self.ancora)
-        log.info("cursor -> %s (%s)", self.eu, motivo)
+        log.debug("cursor -> %s (%s)", self.eu, motivo)
         self._anunciar_troca(anterior, self.eu)
 
     # -- de quem e' o teclado e o mouse -------------------------------------
@@ -310,6 +310,16 @@ class Controle:
             return  # quem comanda e' outro: este mouse nao move o cursor de la'
         self.enfileirar(self.atual, {"t": "mv", "dx": dx, "dy": dy})
 
+    # As travessias vao para DEBUG, e nao INFO. Sao varias por segundo enquanto
+    # se trabalha, e no painel Registro afogavam justamente o que interessa
+    # quando algo da' errado -- ja' atrapalhou um diagnostico aqui. Nada se
+    # perde: quem desconectou, quem recusou handshake e todo erro continuam em
+    # INFO/WARNING, e `--verboso` traz as travessias de volta.
+    #
+    # NAO e' otimizacao. Medido: um log.info destes custa ~10 us (pior caso
+    # 214 us) contra os 300 ms que o Windows da' ao gancho -- some no ruido,
+    # mesmo saindo de dentro do callback do hook (ver entrada_win, que chama
+    # `tratar` ali dentro).
     def tratar(self, ev: dict) -> bool:
         """True = engolir o evento (estamos controlando outro PC)."""
         tipo = ev["t"]
