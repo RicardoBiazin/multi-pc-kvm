@@ -131,6 +131,12 @@ supervisor (sessão 0, SYSTEM)
   └── agente (sessão do console, SYSTEM, desktop Winlogon)   ← tela de bloqueio
 ```
 
+O ícone da bandeja aparece também com o início automático: quem o criava era só
+a janela, e com a tarefa no ar não há janela nenhuma. No agente ele mostra o
+estado e nada mais — não há janela para "Abrir", e "Sair" mentiria, porque o
+supervisor relança o agente em segundos. Ele some e volta a cada troca de
+desktop, junto com o agente.
+
 Cada troca de desktop custa uma partida nova do `.exe`, e um `--onefile`
 extrai o pacote inteiro a cada partida — depois de desbloquear a tela há um
 intervalo até o teclado voltar a atravessar. É o preço de manter um arquivo só.

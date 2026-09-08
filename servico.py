@@ -364,6 +364,17 @@ def rodar_agente(cfg: dict) -> int:
                   "executavel; abra a janela de configuracao e marque "
                   "'Iniciar com o Windows' de novo para grava-lo la'")
         return 2
+    # A bandeja tambem no agente: sem isto, ligar o inicio automatico fazia o
+    # icone sumir de vez, porque quem o criava era so' a janela -- e com a
+    # tarefa no ar nao ha' janela nenhuma. O icone nasce e morre a cada troca
+    # de desktop, junto com o agente.
+    try:
+        import bandeja
+        if bandeja.criar(None, None, m, acoes=False) is None:
+            log.info("sem icone na bandeja (pystray indisponivel)")
+    except Exception:
+        log.warning("nao consegui por o icone na bandeja", exc_info=True)
+
     try:
         while True:
             time.sleep(INTERVALO_DE_VIGIA)

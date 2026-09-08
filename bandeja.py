@@ -25,8 +25,13 @@ def _imagem(cor) -> "object":
     return img
 
 
-def criar(ao_abrir, ao_sair, motor):
-    """Devolve o icone (ja' rodando) ou None se o pystray nao estiver presente."""
+def criar(ao_abrir, ao_sair, motor, acoes: bool = True):
+    """Devolve o icone (ja' rodando) ou None se o pystray nao estiver presente.
+
+    `acoes=False` deixa so' o estado, sem "Abrir" nem "Sair". E' o caso do
+    agente do inicio automatico: nao ha' janela para abrir, e "Sair" mentiria
+    -- o supervisor relanca o agente em segundos.
+    """
     try:
         import pystray
     except ImportError:
@@ -35,12 +40,16 @@ def criar(ao_abrir, ao_sair, motor):
 
     import configuracao as conf
     icone = pystray.Icon(conf.APP, _imagem(CINZA), f"{conf.APP} v{conf.VERSAO}\npor {conf.AUTOR}")
-    icone.menu = pystray.Menu(
-        pystray.MenuItem("Abrir", lambda: ao_abrir(), default=True),
-        pystray.MenuItem(lambda _i: motor.resumo(), None, enabled=False),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Sair", lambda: ao_sair()),
-    )
+    estado = pystray.MenuItem(lambda _i: motor.resumo(), None, enabled=False)
+    if acoes:
+        icone.menu = pystray.Menu(
+            pystray.MenuItem("Abrir", lambda: ao_abrir(), default=True),
+            estado,
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Sair", lambda: ao_sair()),
+        )
+    else:
+        icone.menu = pystray.Menu(estado)
 
     def atualizar() -> None:
         pausa = threading.Event()  # thread daemon: morre com o processo

@@ -163,6 +163,93 @@ def ler(tentativas: int = 3) -> dict | None:
     return None
 
 
+def _ler_por_ole() -> dict | None:
+    """Plano B da leitura: pega o conteudo pelo IDataObject do OLE.
+
+    Programa que publica com `OleSetClipboard` pode deixar no clipboard CRU
+    apenas o marcador registrado "DataObject": as formas de verdade sao
+    renderizadas sob demanda e nao aparecem para `EnumClipboardFormats` nem
+    para `IsClipboardFormatAvailable`.
+
+    Foi o que travou a copia do PC da esquerda em 08/09/2026 -- toda tentativa
+    registrava "(no clipboard: DataObject)" e nada atravessava, enquanto o
+    outro PC, com o mesmo binario e a mesma conta SYSTEM, copiava normalmente.
+    Nao era o SYSTEM nem a rede: era o programa de origem publicando por OLE.
+
+    Devolve None em qualquer tropeco -- isto e' um plano B, nao pode virar mais
+    uma fonte de falha.
+    """
+    try:
+        import pythoncom
+    except ImportError:
+        return None
+    try:
+        # Barato e idempotente na mesma thread; a thread de rede tambem chega
+        # aqui pela releitura de imagem em `aplicar`.
+        pythoncom.CoInitialize()
+    except Exception:
+        pass  # ja' inicializada, ou com outro modelo: seguimos assim mesmo
+    try:
+        objeto = pythoncom.OleGetClipboard()
+    except Exception:
+        log.debug("OleGetClipboard nao devolveu nada", exc_info=True)
+        return None
+
+    disponiveis = set()
+    try:
+        for formato in objeto.EnumFormatEtc():
+            disponiveis.add(formato[0])
+    except Exception:
+        log.debug("nao consegui enumerar os formatos do IDataObject",
+                  exc_info=True)
+        return None
+
+    def pegar(codigo: int) -> bytes | None:
+        try:
+            meio = objeto.GetData((codigo, None, pythoncom.DVASPECT_CONTENT,
+                                   -1, pythoncom.TYMED_HGLOBAL))
+            return bytes(meio.data)
+        except Exception:
+            log.debug("GetData falhou no formato %d", codigo, exc_info=True)
+            return None
+
+    # Mesma ordem do clipboard cru: arquivo antes de texto, porque copiar
+    # arquivo no Explorer costuma deixar tambem o caminho como texto.
+    if win32con.CF_HDROP in disponiveis:
+        bruto = pegar(win32con.CF_HDROP)
+        caminhos = arquivos.ler_hdrop(bruto) if bruto else []
+        if caminhos:
+            log.info("li %d arquivo(s) pela via OLE", len(caminhos))
+            return {"t": "clip", "fmt": "arquivos", "caminhos": caminhos}
+    if win32con.CF_UNICODETEXT in disponiveis:
+        bruto = pegar(win32con.CF_UNICODETEXT)
+        if bruto:
+            texto = bruto.decode("utf-16-le", "ignore").split(chr(0), 1)[0]
+            if texto:
+                log.info("li texto pela via OLE")
+                return {"t": "clip", "fmt": "texto", "dados": texto}
+    if win32con.CF_DIB in disponiveis:
+        bruto = pegar(win32con.CF_DIB)
+        if bruto:
+            log.info("li imagem pela via OLE")
+            return _imagem_de_dib(bruto)
+    return None
+
+
+def _imagem_de_dib(dib: bytes) -> dict | None:
+    """DIB cru -> mensagem de imagem, ou None se nao der para levar."""
+    try:
+        png = _dib_para_png(dib)
+    except Exception:
+        log.warning("imagem no formato DIB nao pudemos converter", exc_info=True)
+        return None
+    if len(png) > TETO_IMAGEM:
+        log.info("imagem de %.1f MB ignorada (teto de %.0f MB)",
+                 len(png) / 1e6, TETO_IMAGEM / 1e6)
+        return None
+    return {"t": "clip", "fmt": "imagem", "dados": base64.b64encode(png).decode()}
+
+
 def _ler_uma_vez() -> dict | None:
     with _Aberto():
         # CF_HDROP vem antes do texto: copiar arquivo no Explorer costuma deixar
@@ -180,19 +267,16 @@ def _ler_uma_vez() -> dict | None:
         if wcb.IsClipboardFormatAvailable(win32con.CF_DIB):
             dib = wcb.GetClipboardData(win32con.CF_DIB)
         else:
-            return None
+            dib = None
+
+    if dib is None:
+        # Nada que conhecamos no clipboard cru. Ainda pode haver conteudo: ver
+        # `_ler_por_ole`. Fora do `_Aberto` porque o OLE abre o clipboard ele
+        # mesmo e nao pode encontra-lo ja' aberto por nos.
+        return _ler_por_ole()
 
     # Converter fora do lock: o Pillow pode demorar em imagens grandes.
-    try:
-        png = _dib_para_png(dib)
-    except Exception:
-        log.warning("imagem no formato DIB nao pudemos converter", exc_info=True)
-        return None
-    if len(png) > TETO_IMAGEM:
-        log.info("imagem de %.1f MB ignorada (teto de %.0f MB)",
-                 len(png) / 1e6, TETO_IMAGEM / 1e6)
-        return None
-    return {"t": "clip", "fmt": "imagem", "dados": base64.b64encode(png).decode()}
+    return _imagem_de_dib(dib)
 
 
 def escrever(msg: dict, tentativas: int = 3) -> None:

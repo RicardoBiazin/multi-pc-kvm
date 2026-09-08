@@ -1332,6 +1332,11 @@ def teste_reenvio_apos_falha_de_envio() -> None:
     sinc = cw.Sincronizador(enviar, parar)
     sinc.start()
     try:
+        # Esperar a thread registrar a sequencia inicial. Sem isto a primeira
+        # copia entra ANTES de o poller ter a referencia, ele nasce ja' a
+        # vendo como "o estado atual" e nao ha' ciclo nenhum -- o teste passava
+        # ou falhava conforme o escalonador.
+        esperar(lambda: sinc._sequencia is not None)
         texto = f"kvm-teste-{int(time.time())}"
         copiar(texto)
         checar("o envio falho e' percebido", esperar(lambda: sinc._falhas >= 1),
@@ -1400,6 +1405,47 @@ def teste_leitura_com_paciencia() -> None:
            "CF_UNICODETEXT" in formatos, ", ".join(formatos))
 
 
+def teste_leitura_por_ole() -> None:
+    """Conteudo publicado por OLE tem de ser lido mesmo assim.
+
+    Em 08/09/2026 toda copia feita no PC da esquerda registrava
+    "(no clipboard: DataObject)" e nada atravessava: o programa de origem
+    publicava com OleSetClipboard, e ali o clipboard CRU tem so' o marcador --
+    as formas de verdade sao renderizadas sob demanda pelo IDataObject. O outro
+    PC, com o mesmo binario e a mesma conta SYSTEM, copiava normalmente; nao
+    era o SYSTEM nem a rede.
+    """
+    print("leitura pela via OLE (IDataObject)")
+
+    ida = ["C:" + chr(92) + "temp" + chr(92) + "um.txt",
+           "C:" + chr(92) + "temp" + chr(92) + "dois.txt"]
+    checar("CF_HDROP cru vai e volta",
+           arquivos.ler_hdrop(arquivos.montar_hdrop(ida)) == ida)
+    checar("e lixo nao vira caminho", arquivos.ler_hdrop(b"curto") == [])
+
+    cw.escrever({"t": "clip", "fmt": "texto", "dados": "sonda-do-ole"})
+    lido = cw._ler_por_ole()
+    checar("o texto do clipboard sai pelo IDataObject",
+           lido is not None and lido.get("dados") == "sonda-do-ole",
+           str(lido)[:50])
+
+    # O que importa de verdade: quando o clipboard cru nao tem nada que
+    # conhecamos, a leitura TEM de cair no plano B em vez de desistir.
+    salvo_disponivel = cw.wcb.IsClipboardFormatAvailable
+    salvo_ole = cw._ler_por_ole
+    try:
+        cw.wcb.IsClipboardFormatAvailable = lambda _f: False
+        cw._ler_por_ole = lambda: {"t": "clip", "fmt": "texto",
+                                   "dados": "veio-do-plano-b"}
+        lido = cw._ler_uma_vez()
+        checar("sem formato conhecido no cru, a leitura tenta o OLE",
+               lido is not None and lido.get("dados") == "veio-do-plano-b",
+               str(lido)[:50])
+    finally:
+        cw.wcb.IsClipboardFormatAvailable = salvo_disponivel
+        cw._ler_por_ole = salvo_ole
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1429,6 +1475,7 @@ def main() -> int:
     teste_recebidos_do_usuario_certo()
     teste_reenvio_apos_falha_de_envio()
     teste_leitura_com_paciencia()
+    teste_leitura_por_ole()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

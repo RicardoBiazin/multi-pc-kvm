@@ -47,6 +47,24 @@ _CABECALHO_DROPFILES = struct.Struct("<IiiII")  # pFiles, pt.x, pt.y, fNC, fWide
 # -- CF_HDROP ---------------------------------------------------------------
 
 
+def ler_hdrop(bruto: bytes) -> list[str]:
+    """O inverso de `montar_hdrop`: caminhos de dentro de um CF_HDROP cru.
+
+    Preciso quando o CF_HDROP nao vem do clipboard do Windows e sim de um
+    IDataObject (ver `_ler_por_ole` no clipboard_win): ali o que chega e' o
+    bloco de bytes, nao a lista ja' desmontada que o pywin32 devolve.
+    """
+    if len(bruto) < _CABECALHO_DROPFILES.size:
+        return []
+    inicio, _x, _y, _nc, largo = _CABECALHO_DROPFILES.unpack_from(bruto, 0)
+    if not 0 < inicio <= len(bruto):
+        return []
+    corpo = bruto[inicio:]
+    texto = (corpo.decode("utf-16-le", "ignore") if largo
+             else corpo.decode("mbcs", "ignore"))
+    return [c for c in texto.split(chr(0)) if c]
+
+
 def montar_hdrop(caminhos) -> bytes:
     """Blob de CF_HDROP para uma lista de caminhos.
 
