@@ -74,6 +74,9 @@ def main() -> int:
         return servico.rodar_como_servico()
 
     cfg = conf.carregar()
+    # Antes do log: se a identidade estiver errada, o proprio NOME DO ARQUIVO
+    # de log sai errado, e ficam dois PCs escrevendo com o mesmo nome.
+    aviso_de_identidade = conf.corrigir_identidade(cfg)
     configurar_log(cfg.get("este_pc", ""), args.verboso,
                    "agente" if args.agente else "")
     ew.ativar_dpi()  # antes de qualquer leitura de coordenada
@@ -92,6 +95,8 @@ def main() -> int:
         log.info("%.0f%% do retangulo do desktop nao esta' em tela nenhuma; o "
                  "cursor sera' puxado para a tela mais proxima nesses pedacos",
                  100 * (1 - area / (largura * altura)))
+    if aviso_de_identidade:
+        log.error("IDENTIDADE: %s", aviso_de_identidade)
     log.info("configuracao: %s", conf.caminho_config())
     log.info("log e relatorios: %s", conf.pasta_de_saida())
     if conf.migrar_inicio_automatico():

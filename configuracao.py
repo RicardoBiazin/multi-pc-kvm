@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.1.5"
+VERSAO = "2.1.6"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -195,6 +195,46 @@ def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:
     destino.write_text(json.dumps(gravavel, indent=2, ensure_ascii=False),
                        encoding="utf-8")
     return destino
+
+
+def corrigir_identidade(cfg: dict) -> str:
+    """Conserta `este_pc` quando o config.json veio de OUTRA maquina.
+
+    Desde que o inicio automatico passou a gravar o config AO LADO DO EXE (o
+    servico roda como SYSTEM e nao le' o %APPDATA% do usuario), copiar a pasta
+    para o outro PC leva a IDENTIDADE junto. O outro PC passa a se achar o
+    servidor, e ficam dois servidores na rede: cada um recusando o handshake do
+    outro, nenhum conectando, e nada no programa apontando a causa.
+
+    Aconteceu em 08/09/2026. Chave igual, porta igual, layout igual -- o que
+    entregou foi o farol, com os DOIS PCs anunciando o mesmo nome.
+
+    Quem decide e' o IP: e' o unico dado do layout que fala desta maquina e nao
+    do arquivo copiado. Devolve o aviso a registrar, ou "" se nao houve o que
+    corrigir.
+    """
+    eu = cfg.get("este_pc", "")
+    pcs = cfg.get("pcs") or []
+    if not pcs:
+        return ""
+    try:
+        import redes
+        meus = {p.ip for p in redes.listar()}
+    except Exception:
+        return ""
+    combinam = [p for p in pcs if p.get("ip") in meus]
+    if not combinam:
+        # Nenhum IP do layout e' desta maquina. Pode ser so' IP desatualizado --
+        # arriscado demais para trocar a identidade por conta propria.
+        return ""
+    if any(p.get("nome") == eu for p in combinam):
+        return ""
+    novo = combinam[0]["nome"]
+    cfg["este_pc"] = novo
+    return (f"o config diz que este PC e' '{eu}', mas o IP desta maquina e' o "
+            f"de '{novo}' no layout. O config.json provavelmente veio junto na "
+            f"copia do executavel do outro PC. Assumindo '{novo}' -- confira e "
+            f"salve na janela para gravar a correcao")
 
 
 # -- inicio automatico com o Windows ----------------------------------------

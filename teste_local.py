@@ -1446,6 +1446,49 @@ def teste_leitura_por_ole() -> None:
         cw._ler_por_ole = salvo_ole
 
 
+def teste_identidade_herdada() -> None:
+    """Config copiado do outro PC nao pode fazer esta maquina se achar aquela.
+
+    Em 08/09/2026 os dois PCs subiram como SERVIDOR e nada conectava. Chave
+    igual, porta igual, layout igual -- o que entregou foi o farol, com os dois
+    anunciando o MESMO nome. O config.json tinha ido junto na copia do
+    executavel, e como ele ganha do %APPDATA%, o outro PC herdou a identidade.
+
+    Quem desempata e' o IP: e' o unico dado do layout que fala da maquina, e
+    nao do arquivo copiado.
+    """
+    print("identidade herdada de outro PC")
+    import redes as rd
+
+    placas = rd.listar()
+    if not placas:
+        checar("ha' placa de rede para o teste", False)
+        return
+    meu_ip = placas[0].ip
+
+    cfg = {"este_pc": "PC-DO-OUTRO",
+           "pcs": [{"nome": "PC-DO-OUTRO", "ip": "10.99.99.99", "servidor": True},
+                   {"nome": "ESTA-MAQUINA", "ip": meu_ip, "servidor": False}]}
+    aviso = conf.corrigir_identidade(cfg)
+    checar("assume o PC cujo IP e' desta maquina",
+           cfg["este_pc"] == "ESTA-MAQUINA", cfg["este_pc"])
+    checar("e diz no log o que fez", "PC-DO-OUTRO" in aviso and "ESTA-MAQUINA" in aviso)
+
+    certo = {"este_pc": "ESTA-MAQUINA",
+             "pcs": [{"nome": "ESTA-MAQUINA", "ip": meu_ip, "servidor": True}]}
+    checar("nao mexe quando ja' esta' certo",
+           conf.corrigir_identidade(certo) == ""
+           and certo["este_pc"] == "ESTA-MAQUINA")
+
+    # IP desatualizado e' comum e nao autoriza trocar a identidade de ninguem.
+    fora = {"este_pc": "X", "pcs": [{"nome": "X", "ip": "10.99.99.99"}]}
+    checar("nenhum IP batendo: nao arrisca",
+           conf.corrigir_identidade(fora) == "" and fora["este_pc"] == "X")
+
+    checar("config vazio nao quebra",
+           conf.corrigir_identidade({"este_pc": "X", "pcs": []}) == "")
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1476,6 +1519,7 @@ def main() -> int:
     teste_reenvio_apos_falha_de_envio()
     teste_leitura_com_paciencia()
     teste_leitura_por_ole()
+    teste_identidade_herdada()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

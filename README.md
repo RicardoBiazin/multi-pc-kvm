@@ -158,6 +158,13 @@ desktop novo (`servico-desktop.txt`, na pasta do programa) e o supervisor o faz
 nascer lá. Quem lê o desktop de entrada é o agente, não o supervisor: da sessão
 0 não se enxerga o desktop das outras sessões.
 
+**Ao levar o `.exe` para o outro PC, não leve o `config.json` junto.** Ele
+carrega a identidade (`este_pc`), e o arquivo ao lado do executável ganha do
+`%APPDATA%` — o outro PC passa a se achar esta máquina e sobe como servidor
+também. Ficam dois servidores, cada um recusando o handshake do outro, e nada
+conecta. Desde a 2.1.6 o programa detecta isso pelo IP e assume a identidade
+certa, registrando `IDENTIDADE:` no log; ainda assim, copie só o `.exe`.
+
 O `config.json` ao lado do `.exe` contém a **chave compartilhada** e fica
 legível para quem tem acesso àquela pasta — no `%APPDATA%` era só seu. Se isso
 importar na sua máquina, ponha o `.exe` numa pasta com permissão restrita.
