@@ -325,6 +325,33 @@ def rodar_como_servico() -> int:
 # -- o agente (sessao do console, num desktop) -------------------------------
 
 
+def _abrir_janela() -> None:
+    """Abre a janela de configuracao a partir do icone da bandeja.
+
+    Com o inicio automatico ligado, o unico icone na bandeja e' o do agente --
+    nao ha' janela nenhuma no ar. Ele nasceu so' com o estado, e clicar nele
+    nao fazia nada: para quem usa, o programa "nao abre mais". Era o icone
+    certo, sem a acao que se espera dele.
+
+    A janela sobe como SYSTEM, no mesmo desktop; ela nao vai iniciar motor
+    nenhum, porque a trava de instancia unica e o proprio aviso da janela
+    cuidam disso (ver motor.JaRodando e interface._iniciar).
+    """
+    sessao = sessao_win.sessao_do_console()
+    if sessao is None:
+        log.warning("sem sessao no console; nao da' para abrir a janela")
+        return
+    executavel, _ = _binario()
+    desktop = sessao_win.meu_desktop() or DESKTOP_PADRAO
+    try:
+        processo = sessao_win.lancar_na_sessao(
+            sessao, desktop, executavel, f'"{executavel}"')
+        processo.Close()
+        log.info("janela de configuracao aberta pela bandeja")
+    except Exception:
+        log.warning("nao consegui abrir a janela pela bandeja", exc_info=True)
+
+
 def rodar_agente(cfg: dict) -> int:
     """Sobe o motor e vigia o desktop de entrada. Devolve o codigo de saida.
 
@@ -370,7 +397,7 @@ def rodar_agente(cfg: dict) -> int:
     # de desktop, junto com o agente.
     try:
         import bandeja
-        if bandeja.criar(None, None, m, acoes=False) is None:
+        if bandeja.criar(_abrir_janela, None, m, acoes=True) is None:
             log.info("sem icone na bandeja (pystray indisponivel)")
     except Exception:
         log.warning("nao consegui por o icone na bandeja", exc_info=True)

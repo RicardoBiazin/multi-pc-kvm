@@ -122,6 +122,16 @@ _FORMATOS_PADRAO = {
 }
 
 
+def _nome_do_formato(codigo: int) -> str:
+    nome = _FORMATOS_PADRAO.get(codigo)
+    if nome is not None:
+        return nome
+    try:
+        return wcb.GetClipboardFormatName(codigo)
+    except Exception:
+        return f"#{codigo}"
+
+
 def formatos_no_clipboard() -> list[str]:
     """O que esta' no clipboard agora, por nome. So' para o log."""
     nomes: list[str] = []
@@ -191,17 +201,27 @@ def _ler_por_ole() -> dict | None:
         pass  # ja' inicializada, ou com outro modelo: seguimos assim mesmo
     try:
         objeto = pythoncom.OleGetClipboard()
-    except Exception:
-        log.debug("OleGetClipboard nao devolveu nada", exc_info=True)
+    except Exception as exc:
+        # INFO, e nao DEBUG: quando esta linha faz falta, ela faz MUITA falta.
+        # Ja' aconteceu duas vezes de a causa estar escondida em DEBUG e o
+        # diagnostico andar em circulo.
+        log.info("o OLE nao entregou o IDataObject: %s", exc)
         return None
 
     disponiveis = set()
     try:
         for formato in objeto.EnumFormatEtc():
             disponiveis.add(formato[0])
-    except Exception:
-        log.debug("nao consegui enumerar os formatos do IDataObject",
-                  exc_info=True)
+    except Exception as exc:
+        log.info("nao consegui enumerar o IDataObject: %s", exc)
+        return None
+    if not disponiveis & {win32con.CF_HDROP, win32con.CF_UNICODETEXT,
+                          win32con.CF_DIB}:
+        # Distingue "o OLE falhou" de "o OLE respondeu e nao tem o que levar" --
+        # sao problemas diferentes e levam a solucoes diferentes.
+        log.info("o IDataObject respondeu, mas so' oferece: %s",
+                 ", ".join(sorted(_nome_do_formato(c) for c in disponiveis))
+                 or "nada")
         return None
 
     def pegar(codigo: int) -> bytes | None:
@@ -209,8 +229,9 @@ def _ler_por_ole() -> dict | None:
             meio = objeto.GetData((codigo, None, pythoncom.DVASPECT_CONTENT,
                                    -1, pythoncom.TYMED_HGLOBAL))
             return bytes(meio.data)
-        except Exception:
-            log.debug("GetData falhou no formato %d", codigo, exc_info=True)
+        except Exception as exc:
+            log.info("o IDataObject oferecia %s mas nao entregou: %s",
+                     _nome_do_formato(codigo), exc)
             return None
 
     # Mesma ordem do clipboard cru: arquivo antes de texto, porque copiar

@@ -1537,6 +1537,74 @@ def teste_registro_sem_ruido() -> None:
            'log.info("cursor -> ' not in fonte)
 
 
+def teste_bandeja_do_agente_abre() -> None:
+    """O icone do agente tem de FAZER alguma coisa.
+
+    Com o inicio automatico ligado o unico icone na bandeja e' o do agente, e
+    ele nasceu (v2.1.5) so' com o estado. Clicar nao fazia nada, e para quem
+    usa o programa "nao abre mais" -- era o icone certo, sem a acao que se
+    espera dele.
+    """
+    print("bandeja do agente")
+    import inspect
+
+    import bandeja
+    import servico as svc
+
+    assinatura = inspect.signature(bandeja.criar)
+    checar("bandeja.criar aceita menu sem acoes", "acoes" in assinatura.parameters)
+
+    fonte = inspect.getsource(svc.rodar_agente)
+    checar("o agente cria a bandeja COM acao de abrir",
+           "_abrir_janela" in fonte and "acoes=True" in fonte)
+    checar("e existe o que abrir", callable(svc._abrir_janela))
+
+    # Sem sessao no console nao ha' onde abrir: tem de desistir sem estourar.
+    salvo = svc.sessao_win.sessao_do_console
+    try:
+        svc.sessao_win.sessao_do_console = lambda: None
+        svc._abrir_janela()  # nao pode levantar
+        checar("sem sessao no console, nao estoura", True)
+    except Exception as exc:
+        checar("sem sessao no console, nao estoura", False, str(exc))
+    finally:
+        svc.sessao_win.sessao_do_console = salvo
+
+    class MotorFalso:
+        def resumo(self):
+            return "parado"
+
+        def ativo(self):
+            return False
+
+    icone = bandeja.criar(lambda: None, None, MotorFalso(), acoes=False)
+    checar("icone sem acoes ainda e' criado", icone is not None)
+    if icone is not None:
+        icone.stop()
+
+
+def teste_plano_b_explica_a_falha() -> None:
+    """Quando o OLE nao entrega, o log tem de dizer ONDE parou.
+
+    Duas vezes seguidas a causa ficou escondida em DEBUG e o diagnostico andou
+    em circulo. "O OLE falhou" e "o OLE respondeu e nao tem o que levar" sao
+    problemas diferentes.
+    """
+    print("o plano B explica a propria falha")
+    import inspect
+
+    fonte = inspect.getsource(cw._ler_por_ole)
+    checar("falha do OleGetClipboard sai em INFO",
+           'log.info("o OLE nao entregou' in fonte)
+    checar("IDataObject sem o que levar tambem sai em INFO",
+           "so' oferece" in fonte)
+    checar("nada da falha ficou em DEBUG", "log.debug" not in fonte)
+    checar("os formatos saem por nome, nao por numero",
+           cw._nome_do_formato(13) == "CF_UNICODETEXT"
+           and cw._nome_do_formato(15) == "CF_HDROP",
+           f"{cw._nome_do_formato(13)}, {cw._nome_do_formato(15)}")
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1569,6 +1637,8 @@ def main() -> int:
     teste_leitura_por_ole()
     teste_identidade_herdada()
     teste_registro_sem_ruido()
+    teste_bandeja_do_agente_abre()
+    teste_plano_b_explica_a_falha()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")
