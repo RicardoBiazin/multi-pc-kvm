@@ -1,7 +1,11 @@
 name: Release
 
-# A cada tag vX.Y.Z: valida (teste_local headless) e publica um Release com as
-# notas dos commits desde a tag anterior. Sem passo manual.
+# A cada tag vX.Y.Z: valida, COMPILA O EXECUTAVEL e publica um Release com ele
+# anexado e as notas dos commits desde a tag anterior. Sem passo manual.
+#
+# O anexo nao e' enluminura: o README manda "baixe o MultiPC-KVM.exe em
+# Releases", e ate' a v2.0.1 os Releases saiam so' com texto -- quem seguia o
+# README nao achava executavel nenhum.
 #
 # Gate deterministico (compila + importa o core). teste_local.py NAO entra: seu
 # sub-teste de injecao move o mouse de verdade e depende de sessao interativa/DPI,
@@ -16,7 +20,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest   # KVM Windows (Win32 via ctypes)
+    runs-on: windows-latest   # KVM Windows (Win32 via ctypes), e o .exe e' Windows
     steps:
       - uses: actions/checkout@v5
         with:
@@ -26,12 +30,46 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Instalar cryptography (o core de rede/cripto so precisa dela)
-        run: pip install "cryptography>=50"
+      - name: Instalar as dependencias de runtime e o empacotador
+        # requirements.txt tem o runtime; o PyInstaller so' e' preciso aqui.
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
       - name: Compilar tudo e importar o core (smoke)
         run: |
           python -m compileall .
           python -c "import protocolo, configuracao, descoberta, alvo, arquivos"
+
+      - name: Conferir que a tag bate com a VERSAO do codigo
+        # Tag e VERSAO divergentes gerariam um Release "v2.2.1" com um .exe que
+        # se anuncia 2.2.0 -- e a versao aparece na janela, no log e no farol.
+        shell: bash
+        run: |
+          VERSAO=$(python -c "import configuracao; print(configuracao.VERSAO)")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "VERSAO=$VERSAO  TAG=$TAG"
+          if [ "$VERSAO" != "$TAG" ]; then
+            echo "::error::a tag ${GITHUB_REF_NAME} nao bate com VERSAO=$VERSAO em configuracao.py"
+            exit 1
+          fi
+
+      - name: Gerar o executavel
+        run: python empacotar.py
+
+      - name: Conferir o executavel
+        # Um .exe que saiu pela metade (falta de dependencia, por exemplo) ainda
+        # existe no disco; o tamanho e' a checagem barata que pega isso.
+        shell: bash
+        run: |
+          EXE="dist/MultiPC-KVM.exe"
+          test -f "$EXE" || { echo "::error::$EXE nao foi gerado"; exit 1; }
+          TAMANHO=$(stat -c%s "$EXE")
+          echo "$EXE: $TAMANHO bytes"
+          if [ "$TAMANHO" -lt 20000000 ]; then
+            echo "::error::$EXE tem so' $TAMANHO bytes -- saiu incompleto"
+            exit 1
+          fi
 
       - name: Montar as notas dos commits
         shell: bash
@@ -41,8 +79,13 @@ jobs:
           if [ -n "$PREV" ]; then echo "## Mudanças desde ${PREV}" > NOTES.md; RANGE="${PREV}..${TAG}"; else echo "## Primeiro release" > NOTES.md; RANGE="${TAG}"; fi
           echo "" >> NOTES.md
           git log --no-merges --pretty='- %s' "$RANGE" >> NOTES.md
+          echo "" >> NOTES.md
+          echo "---" >> NOTES.md
+          echo "" >> NOTES.md
+          echo "Baixe o \`MultiPC-KVM.exe\` abaixo e copie **o mesmo arquivo** para cada PC." >> NOTES.md
+          echo "Não leve o \`config.json\` junto: ele carrega a identidade da máquina de origem." >> NOTES.md
 
-      - name: Publicar o Release
+      - name: Publicar o Release com o executavel
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file NOTES.md
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file NOTES.md "dist/MultiPC-KVM.exe"
