@@ -324,9 +324,15 @@ class Janela(tk.Tk):
         ttk.Label(self, textvariable=self.var_estado, anchor="w").grid(
             row=5, column=0, columnspan=2, sticky="ew", padx=14, pady=(6, 0))
 
-        quadro_log = ttk.LabelFrame(self, text=" Registro ")
-        quadro_log.grid(row=6, column=0, columnspan=2, sticky="nsew",
-                        padx=10, pady=(4, 10))
+        # O Registro e o Uso dividem a linha 6. Um container so' para os dois
+        # evita mexer no grid da janela inteira.
+        linha_de_baixo = ttk.Frame(self)
+        linha_de_baixo.grid(row=6, column=0, columnspan=2, sticky="nsew",
+                            padx=10, pady=(4, 10))
+        linha_de_baixo.columnconfigure(0, weight=1)  # o log estica; o uso, nao
+
+        quadro_log = ttk.LabelFrame(linha_de_baixo, text=" Registro ")
+        quadro_log.grid(row=0, column=0, sticky="nsew")
         self.texto_log = tk.Text(quadro_log, height=8, width=125, wrap="none",
                                  font=("Consolas", 8), state="disabled",
                                  relief="flat")
@@ -353,6 +359,94 @@ class Janela(tk.Tk):
                    command=self._abrir_pasta).grid(row=0, column=2)
         ttk.Button(acoes_log, text="Limpar",
                    command=self._limpar_registro).grid(row=0, column=3, padx=6)
+
+        self._montar_uso(linha_de_baixo)
+
+    def _montar_uso(self, pai) -> None:
+        """Quantas teclas e cliques caem em cada PC hoje.
+
+        Os numeros vem do SERVIDOR: e' ele que sabe o destino de cada evento
+        (ver contador.py). Na janela de um cliente nao ha' o que mostrar, e o
+        painel diz isso em vez de exibir zeros que pareceriam contagem parada.
+        """
+        quadro = ttk.LabelFrame(pai, text=" Uso de hoje ")
+        quadro.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        self.var_contar = tk.BooleanVar(
+            value=bool(self.cfg.get("contar_uso", True)))
+        ttk.Checkbutton(quadro, text="Contar", variable=self.var_contar,
+                        command=self._alternar_contagem).grid(
+                            row=0, column=0, sticky="w", padx=6, pady=(4, 0))
+
+        self.texto_uso = tk.Text(quadro, height=7, width=44, wrap="none",
+                                 font=("Consolas", 8), state="disabled",
+                                 relief="flat")
+        self._pintar(self.texto_uso, bg="log_fundo", fg="log_texto")
+        self.texto_uso.grid(row=1, column=0, padx=6, pady=6, sticky="nsew")
+
+        ttk.Button(quadro, text="Limpar contagem",
+                   command=self._limpar_contagem).grid(
+                       row=2, column=0, sticky="w", padx=6, pady=(0, 8))
+        self._atualizar_uso()
+
+    def _alternar_contagem(self) -> None:
+        ligado = self.var_contar.get()
+        self.cfg["contar_uso"] = ligado
+        conf.salvar(self.cfg)
+        contagem = getattr(self.motor, "contador", None)
+        if contagem is not None:
+            contagem.ativo = ligado
+            if not ligado:
+                contagem.gravar()  # nao perder o que ja' foi contado
+        self._avisar("contagem de uso ligada" if ligado
+                     else "contagem de uso parada (o que ja' contou fica)")
+        self._atualizar_uso()
+
+    def _limpar_contagem(self) -> None:
+        contagem = getattr(self.motor, "contador", None)
+        if contagem is None:
+            self._avisar("nao ha' contagem nesta maquina")
+            return
+        if not messagebox.askyesno(
+                conf.APP, "Zerar a contagem de teclas e cliques de hoje?"):
+            return
+        contagem.limpar()
+        self._atualizar_uso()
+
+    def _atualizar_uso(self) -> None:
+        """Redesenha o painel. Reagendado sozinho enquanto a janela viver."""
+        try:
+            self._desenhar_uso()
+        finally:
+            self.after(2000, self._atualizar_uso)
+
+    def _desenhar_uso(self) -> None:
+        contagem = getattr(self.motor, "contador", None)
+        if contagem is None:
+            corpo = ("Quem conta e' o servidor: e' ele\n"
+                     "que sabe em qual PC cada tecla\n"
+                     "e cada clique aterrissou.\n\n"
+                     "Esta maquina e' cliente (ou o\n"
+                     "motor esta' parado).")
+        elif not contagem.ativo:
+            corpo = "Contagem parada.\nO que ja' foi contado esta' guardado."
+        else:
+            linhas = contagem.resumo()
+            if not linhas:
+                corpo = "Nada contado hoje ainda."
+            else:
+                corpo = f"{'PC':<16}{'teclas':>7}{'cliques':>8}{'/min':>7}\n"
+                corpo += "-" * 38 + "\n"
+                for linha in linhas:
+                    corpo += (f"{linha['pc'][:16]:<16}{linha['teclas']:>7}"
+                              f"{linha['cliques']:>8}"
+                              f"{linha['por_minuto']:>7.1f}\n")
+                corpo += ("\nmedia por minuto ATIVO (so' os minutos\n"
+                          "em que houve alguma coisa)")
+        self.texto_uso.configure(state="normal")
+        self.texto_uso.delete("1.0", "end")
+        self.texto_uso.insert("1.0", corpo)
+        self.texto_uso.configure(state="disabled")
 
     def _montar_rodape(self) -> None:
         """Versao, autoria e a troca de tema."""

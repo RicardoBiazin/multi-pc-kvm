@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.1.8"
+VERSAO = "2.2.0"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -138,6 +138,9 @@ def padrao() -> dict:
         "usar_bandeja": True,
         "descoberta": True,
         "avisar_troca": True,
+        # Contagem de teclas e cliques por PC (ver contador.py). Opcional, mas
+        # nasce ligada: quem nao quiser desmarca "Contar" no painel Uso.
+        "contar_uso": True,
         # "sistema" segue o tema do Windows; "claro" e "escuro" mandam nele.
         "tema": "sistema",
         "pcs": [

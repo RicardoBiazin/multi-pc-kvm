@@ -186,6 +186,30 @@ Cada papel escreve seu próprio log (`-servico`, `-agente`): três processos no
 mesmo arquivo embaralhariam justamente o que se lê para entender uma falha de
 início.
 
+## Contagem de uso
+
+Ao lado do *Registro* há o painel **Uso de hoje**: quantas teclas e quantos
+cliques caíram em **cada PC**, e a média por minuto.
+
+| | |
+|---|---|
+| **Contar** | desmarque para parar; o que já foi contado fica guardado |
+| **Limpar contagem** | zera o dia |
+
+Quem conta é o **servidor** — é o único ponto que sabe o destino de cada evento
+(quando o cursor está noutro PC, para quem ele foi). Por isso a janela de um
+cliente não mostra números, e diz isso em vez de exibir zeros.
+
+A média é por **minuto ativo**, não por minuto corrido: contar o dia inteiro
+pelo relógio daria quase zero em qualquer jornada normal (3000 teclas das 8h às
+18h viram "5 por minuto"). Contando só os minutos em que houve alguma coisa, o
+número responde ao que se pergunta de verdade — o ritmo enquanto se trabalha.
+
+A contagem é gravada em `uso.json`, na pasta do programa, e o fechamento de cada
+dia vai para `uso-historico.jsonl`. Gravar em disco não é capricho: com o início
+automático ligado, o agente morre e nasce a cada bloqueio de tela, e contagem só
+na memória zeraria várias vezes por dia.
+
 ## PC com mais de um monitor
 
 Cada PC ocupa **uma** célula no mapa, mesmo tendo vários monitores: a travessia

@@ -17,6 +17,8 @@ import win32event
 import winerror
 
 import cliente
+import configuracao as conf
+import contador
 import layout as lay
 import servidor
 
@@ -67,6 +69,9 @@ class Motor:
         self.thread: threading.Thread | None = None
         self.parada = threading.Event()
         self.trava = None
+        # So' existe quando esta maquina e' o servidor; a janela de um cliente
+        # nao tem numeros proprios para mostrar.
+        self.contador = None
         self.ao_mudar = lambda: None
         self.ao_trocar = lambda de, para: None
 
@@ -119,6 +124,12 @@ class Motor:
         if pc_servidor is not None and pc_servidor.nome == cfg["este_pc"]:
             servidor_novo = servidor.Servidor(cfg, self.parada)
             servidor_novo.controle.ao_trocar = self.ao_trocar
+            # A contagem de uso mora no servidor: e' o unico ponto que sabe o
+            # destino de cada tecla e de cada clique (ver contador.py).
+            self.contador = contador.Contador(
+                conf.pasta_de_saida() / "uso.json",
+                ativo=bool(cfg.get("contar_uso", True)))
+            servidor_novo.controle.contar = self.contador.registrar
             self.papel = servidor_novo
         else:
             cliente_novo = cliente.Cliente(cfg, self.parada)
@@ -144,6 +155,8 @@ class Motor:
         if self.thread is not None:
             self.thread.join(timeout=3)
         self.thread = None
+        if self.contador is not None:
+            self.contador.gravar()  # o que ainda nao foi para o disco
         if self.trava is not None:
             self.trava.Close()  # solta a vez para a proxima instancia
             self.trava = None

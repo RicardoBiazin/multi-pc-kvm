@@ -1605,6 +1605,70 @@ def teste_plano_b_explica_a_falha() -> None:
            f"{cw._nome_do_formato(13)}, {cw._nome_do_formato(15)}")
 
 
+def teste_contagem_de_uso() -> None:
+    """Teclas e cliques por PC, por dia, com media por minuto ativo.
+
+    Conta no SERVIDOR porque so' ele sabe o DESTINO de cada evento. E grava em
+    disco porque, com o inicio automatico ligado, o agente morre e nasce a cada
+    bloqueio de tela -- contagem so' na memoria zeraria varias vezes por dia.
+    """
+    print("contagem de uso (teclas e cliques por PC)")
+    import tempfile
+
+    import contador as ct
+
+    with tempfile.TemporaryDirectory() as tmp:
+        arquivo = pathlib.Path(tmp) / "uso.json"
+        c = ct.Contador(arquivo)
+
+        for _ in range(10):
+            c.registrar("PC-A", {"t": "key", "down": True})
+            c.registrar("PC-A", {"t": "key", "down": False})
+        c.registrar("PC-A", {"t": "btn", "b": "esq", "down": True})
+        c.registrar("PC-B", {"t": "btn", "b": "esq", "down": True})
+        c.registrar("PC-A", {"t": "mv", "pos": (1, 2)})
+        c.registrar("PC-A", {"t": "whl", "d": 120})
+
+        por_pc = {linha["pc"]: linha for linha in c.resumo()}
+        checar("conta a tecla uma vez, nao duas",
+               por_pc["PC-A"]["teclas"] == 10, por_pc["PC-A"]["teclas"])
+        checar("conta o clique", por_pc["PC-A"]["cliques"] == 1)
+        checar("movimento e roda nao sao digitacao nem clique",
+               por_pc["PC-A"]["teclas"] + por_pc["PC-A"]["cliques"] == 11)
+        checar("separa por PC", por_pc["PC-B"]["cliques"] == 1
+               and por_pc["PC-B"]["teclas"] == 0)
+        checar("media por minuto ativo", por_pc["PC-A"]["por_minuto"] == 11.0,
+               por_pc["PC-A"]["por_minuto"])
+
+        # Sobreviver ao reinicio e' o ponto: o agente renasce a cada bloqueio.
+        c.gravar()
+        renascido = ct.Contador(arquivo)
+        checar("a contagem sobrevive ao reinicio do processo",
+               renascido.resumo()[0]["teclas"] == 10)
+
+        # Parar de contar.
+        renascido.ativo = False
+        renascido.registrar("PC-A", {"t": "key", "down": True})
+        checar("parado, nao soma", renascido.resumo()[0]["teclas"] == 10)
+        renascido.ativo = True
+        renascido.registrar("PC-A", {"t": "key", "down": True})
+        checar("religado, volta a somar", renascido.resumo()[0]["teclas"] == 11)
+
+        renascido.limpar()
+        checar("limpar zera tudo", renascido.resumo() == [])
+        checar("e o zero vai para o disco",
+               ct.Contador(arquivo).resumo() == [])
+
+    # A contagem sai do ponto que conhece o destino do evento -- e o padrao e'
+    # inofensivo, para o Controle funcionar sem contador nenhum.
+    fonte = pathlib.Path("borda.py").read_text(encoding="utf-8")
+    checar("o Controle nasce com contagem inofensiva",
+           "self.contar = lambda pc, ev: None" in fonte)
+    checar("conta o que fica neste PC e o que vai para outro",
+           fonte.count("self.contar(self.eu, ev)") >= 2
+           and fonte.count("self.contar(self.atual, ev)") >= 2)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1639,6 +1703,7 @@ def main() -> int:
     teste_registro_sem_ruido()
     teste_bandeja_do_agente_abre()
     teste_plano_b_explica_a_falha()
+    teste_contagem_de_uso()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

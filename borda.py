@@ -74,6 +74,10 @@ class Controle:
                              self.monitores)
         self.conectados: set[str] = set()
         self.ao_trocar = lambda de, para: None  # a interface avisa na tela
+        # Quem conta teclas e cliques por PC. Fica aqui porque este e' o unico
+        # ponto que sabe o DESTINO de cada evento. Padrao inofensivo: sem
+        # contador ligado, nao custa nada e nao muda nada.
+        self.contar = lambda pc, ev: None
         self._liberado_em = 0.0
         self._engolidas: set[int] = set()
 
@@ -233,11 +237,13 @@ class Controle:
         if origem != self.comandante:
             return  # evento atrasado de quem ja' nao comanda
         if self.atual != self.eu:
+            self.contar(self.atual, ev)
             self.enfileirar(self.atual, ev)  # so' repassa: o alvo e' outro
             return
         if not self.alvo.ativo:
             return  # nao somos alvo (ainda): nada a injetar
         if ev.get("t") != "mv":
+            self.contar(self.eu, ev)
             self.enfileirar(LOCAL, {"t": "injetar", "ev": ev})
             return
         self.alvo.mover(ev["dx"], ev["dy"])
@@ -352,7 +358,9 @@ class Controle:
 
         if tipo == "key":
             if not self.remoto:
+                self.contar(self.eu, ev)
                 return False
+            self.contar(self.atual, ev)
             self.enfileirar(self.atual, ev)
             return True
 
@@ -366,7 +374,9 @@ class Controle:
 
         # botoes e roda
         if not self.remoto:
+            self.contar(self.eu, ev)
             return False
+        self.contar(self.atual, ev)
         self.enfileirar(self.atual, ev)
         return True
 
