@@ -206,6 +206,11 @@ Quem conta é o **servidor** — é o único ponto que sabe o destino de cada ev
 (quando o cursor está noutro PC, para quem ele foi). Por isso a janela de um
 cliente não mostra números, e diz isso em vez de exibir zeros.
 
+Segurar uma tecla conta **um** toque, não vários: o Windows repete o `keydown`
+enquanto ela fica presa, e sem essa guarda dois segundos de tecla presa viravam
+dezenas de "digitações". Teclas diferentes ao mesmo tempo (Shift+C) contam as
+duas, porque são toques distintos.
+
 A média é por **minuto ativo**, não por minuto corrido: contar o dia inteiro
 pelo relógio daria quase zero em qualquer jornada normal (3000 teclas das 8h às
 18h viram "5 por minuto"). Contando só os minutos em que houve alguma coisa, o

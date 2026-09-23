@@ -53,6 +53,11 @@ class Contador:
         self._pcs: dict[str, dict[str, int]] = {}
         self._minutos: dict[str, int] = {}   # minutos ativos por PC
         self._ultimo_minuto: dict[str, int] = {}
+        # Teclas fisicamente presas agora, por codigo virtual. E' o que separa
+        # "digitou" de "segurou" -- ver `registrar`. Global e nao por PC: o
+        # teclado e' um so', e uma tecla esta' presa ou nao, independente de
+        # para qual PC o toque foi.
+        self._pressionadas: set[int] = set()
         self._sujo = False
         self._carregar()
         threading.Thread(target=self._gravar_de_tempos_em_tempos,
@@ -62,15 +67,34 @@ class Contador:
 
     def registrar(self, pc: str, ev: dict) -> None:
         """Soma uma tecla ou um clique para `pc`. Ignora o resto."""
+        tipo = ev.get("t")
+        if tipo == "key" and not ev.get("down"):
+            # A SOLTURA e' processada mesmo com a contagem parada: e' ela que
+            # limpa o registro de "esta' pressionada". Sem isso, religar a
+            # contagem com uma tecla ainda presa engoliria o proximo toque dela.
+            with self._lock:
+                self._pressionadas.discard(ev.get("vk"))
+            return
         if not self.ativo or not pc:
             return
-        tipo = ev.get("t")
         if not ev.get("down"):
             return  # so' a descida conta: senao cada tecla valeria por duas
         if tipo == "key":
+            # SEGURAR A TECLA NAO E' DIGITAR VARIAS VEZES. O Windows repete o
+            # keydown enquanto a tecla fica presa (auto-repeat), e sem esta
+            # guarda uma tecla segurada por dois segundos entrava como dezenas
+            # de toques -- o numero do painel deixava de significar alguma
+            # coisa. O hook de baixo nivel nao marca o repeat, entao quem
+            # lembra somos nos: conta so' a descida que vem depois de uma
+            # soltura.
+            vk = ev.get("vk")
+            with self._lock:
+                if vk in self._pressionadas:
+                    return
+                self._pressionadas.add(vk)
             campo = "teclas"
         elif tipo == "btn":
-            campo = "cliques"
+            campo = "cliques"  # botao de mouse nao tem auto-repeat
         else:
             return  # movimento e roda nao sao "digitacao" nem "clique"
 
@@ -111,6 +135,7 @@ class Contador:
             self._pcs.clear()
             self._minutos.clear()
             self._ultimo_minuto.clear()
+            self._pressionadas.clear()
             self._sujo = True
         self.gravar()
         log.info("contagem de uso zerada")

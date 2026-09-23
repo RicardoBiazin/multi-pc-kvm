@@ -1621,9 +1621,9 @@ def teste_contagem_de_uso() -> None:
         arquivo = pathlib.Path(tmp) / "uso.json"
         c = ct.Contador(arquivo)
 
-        for _ in range(10):
-            c.registrar("PC-A", {"t": "key", "down": True})
-            c.registrar("PC-A", {"t": "key", "down": False})
+        for n in range(10):
+            c.registrar("PC-A", {"t": "key", "vk": 65 + n, "down": True})
+            c.registrar("PC-A", {"t": "key", "vk": 65 + n, "down": False})
         c.registrar("PC-A", {"t": "btn", "b": "esq", "down": True})
         c.registrar("PC-B", {"t": "btn", "b": "esq", "down": True})
         c.registrar("PC-A", {"t": "mv", "pos": (1, 2)})
@@ -1648,11 +1648,36 @@ def teste_contagem_de_uso() -> None:
 
         # Parar de contar.
         renascido.ativo = False
-        renascido.registrar("PC-A", {"t": "key", "down": True})
+        renascido.registrar("PC-A", {"t": "key", "vk": 90, "down": True})
         checar("parado, nao soma", renascido.resumo()[0]["teclas"] == 10)
         renascido.ativo = True
-        renascido.registrar("PC-A", {"t": "key", "down": True})
+        renascido.registrar("PC-A", {"t": "key", "vk": 90, "down": True})
         checar("religado, volta a somar", renascido.resumo()[0]["teclas"] == 11)
+
+        # SEGURAR A TECLA NAO E' DIGITAR VARIAS VEZES. O Windows repete o
+        # keydown enquanto ela fica presa; sem guarda, segurar por dois
+        # segundos entrava como dezenas de toques e o numero perdia o sentido.
+        renascido.limpar()
+        for _ in range(40):
+            renascido.registrar("PC-A", {"t": "key", "vk": 65, "down": True})
+        checar("tecla segurada conta UMA vez",
+               renascido.resumo()[0]["teclas"] == 1,
+               renascido.resumo()[0]["teclas"])
+        renascido.registrar("PC-A", {"t": "key", "vk": 65, "down": False})
+        renascido.registrar("PC-A", {"t": "key", "vk": 65, "down": True})
+        checar("soltar e apertar de novo conta outra",
+               renascido.resumo()[0]["teclas"] == 2)
+        # Combinacao: teclas diferentes presas ao mesmo tempo sao toques
+        # distintos, nao repeticao.
+        renascido.registrar("PC-A", {"t": "key", "vk": 16, "down": True})
+        renascido.registrar("PC-A", {"t": "key", "vk": 67, "down": True})
+        checar("Shift+C conta as duas", renascido.resumo()[0]["teclas"] == 4)
+        # Segurar o botao do mouse tambem nao vira varios cliques.
+        renascido.limpar()
+        for _ in range(5):
+            renascido.registrar("PC-A", {"t": "btn", "b": "esq", "down": True})
+            renascido.registrar("PC-A", {"t": "btn", "b": "esq", "down": False})
+        checar("cinco cliques sao cinco", renascido.resumo()[0]["cliques"] == 5)
 
         renascido.limpar()
         checar("limpar zera tudo", renascido.resumo() == [])
