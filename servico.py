@@ -325,6 +325,34 @@ def rodar_como_servico() -> int:
 # -- o agente (sessao do console, num desktop) -------------------------------
 
 
+def parar_tarefa() -> None:
+    """Para a tarefa AGORA, sem desregistrar: ela volta no proximo boot."""
+    tarefa = _tarefa()
+    if tarefa is None:
+        return
+    tarefa.Stop(0)
+
+
+def _encerrar_tudo() -> None:
+    """O "Sair" do icone do agente, e o unico que encerra de verdade.
+
+    Matar so' o agente nao adianta: o supervisor o relanca em segundos, e para
+    quem clicou o programa "nao fecha". Quem precisa parar e' a TAREFA -- e o
+    agente roda como SYSTEM, entao para a propria tarefa sem pedir UAC a
+    ninguem. O job object leva o agente junto quando o supervisor morre.
+
+    Nao desregistra a tarefa: fechar hoje nao deve significar nunca mais
+    ligar sozinho. Para desligar de vez, a janela tem "Iniciar com o Windows".
+    """
+    log.info("Sair pedido pela bandeja: parando a tarefa de inicio automatico")
+    try:
+        parar_tarefa()
+    except Exception:
+        log.warning("nao consegui parar a tarefa; encerrando so' o agente",
+                    exc_info=True)
+        raise SystemExit(0)
+
+
 def _abrir_janela() -> None:
     """Abre a janela de configuracao a partir do icone da bandeja.
 
@@ -397,7 +425,10 @@ def rodar_agente(cfg: dict) -> int:
     # de desktop, junto com o agente.
     try:
         import bandeja
-        if bandeja.criar(_abrir_janela, None, m, acoes=True) is None:
+        if bandeja.criar(_abrir_janela, _encerrar_tudo, m, acoes=True,
+                         titulo="inicio automatico",
+                         rotulo_abrir="Abrir configuracao",
+                         rotulo_sair="Sair (volta no proximo boot)") is None:
             log.info("sem icone na bandeja (pystray indisponivel)")
     except Exception:
         log.warning("nao consegui por o icone na bandeja", exc_info=True)

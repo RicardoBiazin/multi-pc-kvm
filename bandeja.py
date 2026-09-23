@@ -25,12 +25,17 @@ def _imagem(cor) -> "object":
     return img
 
 
-def criar(ao_abrir, ao_sair, motor, acoes: bool = True):
+def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
+          rotulo_abrir: str = "Abrir", rotulo_sair: str = "Sair"):
     """Devolve o icone (ja' rodando) ou None se o pystray nao estiver presente.
 
-    `acoes=False` deixa so' o estado, sem "Abrir" nem "Sair". E' o caso do
-    agente do inicio automatico: nao ha' janela para abrir, e "Sair" mentiria
-    -- o supervisor relanca o agente em segundos.
+    Cada item so' aparece se houver o que chamar: passar `ao_sair=None` com
+    `acoes=True` montava um "Sair" que executava `None()` e estourava calado.
+    Foi o que fez o menu do agente ter um Sair que nao podia funcionar.
+
+    `titulo` distingue os icones. Com o inicio automatico ligado ha' DOIS na
+    bandeja -- o do agente e o da janela --, e ate' aqui os dois eram iguais:
+    nao havia como saber em qual se estava clicando.
     """
     try:
         import pystray
@@ -39,17 +44,21 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True):
         return None
 
     import configuracao as conf
-    icone = pystray.Icon(conf.APP, _imagem(CINZA), f"{conf.APP} v{conf.VERSAO}\npor {conf.AUTOR}")
+    legenda = f"{conf.APP} v{conf.VERSAO}"
+    if titulo:
+        legenda += f" -- {titulo}"
+    icone = pystray.Icon(conf.APP, _imagem(CINZA),
+                         f"{legenda}\npor {conf.AUTOR}")
     estado = pystray.MenuItem(lambda _i: motor.resumo(), None, enabled=False)
-    if acoes:
-        icone.menu = pystray.Menu(
-            pystray.MenuItem("Abrir", lambda: ao_abrir(), default=True),
-            estado,
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Sair", lambda: ao_sair()),
-        )
-    else:
-        icone.menu = pystray.Menu(estado)
+    itens = []
+    if acoes and ao_abrir is not None:
+        itens.append(pystray.MenuItem(rotulo_abrir, lambda: ao_abrir(),
+                                      default=True))
+    itens.append(estado)
+    if acoes and ao_sair is not None:
+        itens.append(pystray.Menu.SEPARATOR)
+        itens.append(pystray.MenuItem(rotulo_sair, lambda: ao_sair()))
+    icone.menu = pystray.Menu(*itens)
 
     def atualizar() -> None:
         pausa = threading.Event()  # thread daemon: morre com o processo

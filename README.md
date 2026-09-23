@@ -133,9 +133,15 @@ supervisor (sessão 0, SYSTEM)
 
 O ícone da bandeja aparece também com o início automático: quem o criava era só
 a janela, e com a tarefa no ar não há janela nenhuma. Clicar nele **abre a
-janela de configuração** — com a tarefa rodando, esse é o único ícone que
-existe, e um ícone que não faz nada parece o programa travado. Não há "Sair":
-mentiria, porque o supervisor relança o agente em segundos. Ele some e volta a cada troca de
+janela de configuração**, e o "Sair" dele **para a tarefa** — encerrar só o
+agente não adiantaria, o supervisor o relança em segundos. A tarefa continua
+registrada: volta no próximo boot. Para desligar de vez, desmarque *Iniciar com
+o Windows*.
+
+Com o início automático ligado há **dois** ícones na bandeja — o do agente
+(`início automático`) e o da janela (`janela`), identificados na dica de
+ferramenta. Só o do agente encerra o compartilhamento; fechar a janela apenas
+fecha a janela, e ela avisa isso. Ele some e volta a cada troca de
 desktop, junto com o agente.
 
 Cada troca de desktop custa uma partida nova do `.exe`, e um `--onefile`

@@ -1669,6 +1669,72 @@ def teste_contagem_de_uso() -> None:
            and fonte.count("self.contar(self.atual, ev)") >= 2)
 
 
+def teste_sair_da_bandeja() -> None:
+    """"Sair" tem de encerrar, ou nao existir.
+
+    Em 23/09/2026: o agente montava o menu com acoes=True e ao_sair=None, entao
+    o item "Sair" chamava `None()` e estourava calado. Pior, com o inicio
+    automatico ligado ha' DOIS icones iguais na bandeja -- o do agente e o da
+    janela --, e o unico que encerra de verdade e' o do agente: matar so' o
+    agente nao adianta, o supervisor o relanca em segundos.
+    """
+    print("sair pela bandeja")
+    import inspect
+
+    import bandeja
+    import servico as svc
+
+    class MotorFalso:
+        def resumo(self):
+            return "parado"
+
+        def ativo(self):
+            return False
+
+    def rotulos(icone):
+        return [getattr(i, "text", "") for i in icone.menu]
+
+    icone = bandeja.criar(lambda: None, None, MotorFalso(), acoes=True)
+    try:
+        checar("sem ao_sair, nao ha' item 'Sair' para estourar",
+               not any("Sair" in r for r in rotulos(icone)), str(rotulos(icone)))
+    finally:
+        icone.stop()
+
+    icone = bandeja.criar(lambda: None, lambda: None, MotorFalso(), acoes=True,
+                          titulo="inicio automatico", rotulo_sair="Sair (x)")
+    try:
+        nomes = rotulos(icone)
+        checar("com ao_sair, o item aparece", any("Sair" in r for r in nomes))
+        checar("e o rotulo e' o que se pediu", any("Sair (x)" == r for r in nomes),
+               str(nomes))
+    finally:
+        icone.stop()
+
+    icone = bandeja.criar(None, None, MotorFalso(), acoes=False)
+    try:
+        checar("sem acoes, so' o estado", len(rotulos(icone)) == 1)
+    finally:
+        icone.stop()
+
+    # O Sair do agente para a TAREFA, nao so' o proprio processo.
+    fonte = inspect.getsource(svc._encerrar_tudo)
+    checar("o Sair do agente para a tarefa", "parar_tarefa()" in fonte)
+    checar("e nao desregistra (volta no proximo boot)",
+           "remover()" not in fonte)
+    checar("parar_tarefa nao apaga a tarefa",
+           "DeleteTask" not in inspect.getsource(svc.parar_tarefa))
+
+    # Os dois icones tem de ser distinguiveis.
+    da_janela = pathlib.Path("interface.py").read_text(encoding="utf-8")
+    do_agente = pathlib.Path("servico.py").read_text(encoding="utf-8")
+    checar("o icone da janela se identifica", 'titulo="janela"' in da_janela)
+    checar("o do agente tambem",
+           'titulo="inicio automatico"' in do_agente)
+    checar("fechar a janela avisa que o KVM continua",
+           "NAO para o compartilhamento" in da_janela)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1704,6 +1770,7 @@ def main() -> int:
     teste_bandeja_do_agente_abre()
     teste_plano_b_explica_a_falha()
     teste_contagem_de_uso()
+    teste_sair_da_bandeja()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

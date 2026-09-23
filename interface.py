@@ -1194,8 +1194,9 @@ class Janela(tk.Tk):
         except ImportError:
             return False
         if self._icone_bandeja is None:
-            self._icone_bandeja = bandeja.criar(self._restaurar, self._sair_de_vez,
-                                                self.motor)
+            self._icone_bandeja = bandeja.criar(
+                self._restaurar, self._sair_de_vez, self.motor,
+                titulo="janela")
             if self._icone_bandeja is None:
                 return False
         self.withdraw()
@@ -1208,6 +1209,18 @@ class Janela(tk.Tk):
         self.after(0, self._encerrar)
 
     def _encerrar(self) -> None:
+        # Fechar a JANELA nao para o inicio automatico: quem roda o KVM ali e'
+        # o agente, noutro processo. Sem este aviso a janela some, o
+        # compartilhamento continua, e a conclusao obvia e' "nao fecha".
+        if servico.rodando():
+            if not messagebox.askokcancel(
+                    conf.APP, "Fechar esta janela NAO para o compartilhamento: "
+                                "quem o mantem no ar e' o inicio automatico, "
+                                "noutro processo.\n\nPara parar tudo, use o "
+                                "'Sair' do icone 'inicio automatico' na "
+                                "bandeja, ou desmarque 'Iniciar com o "
+                                "Windows'.\n\nFechar a janela mesmo assim?"):
+                return
         if self._icone_bandeja is not None:
             self._icone_bandeja.stop()
         self.motor.parar()
