@@ -119,6 +119,13 @@ motor da janela** antes de registrar a tarefa, abrir a janela com a tarefa no ar
 não inicia nada (ela vira só tela de configuração), e um mutex
 `Global\MultiPCKVM-motor` barra qualquer caminho que escape dos dois primeiros.
 
+**A janela não cobre a tela de bloqueio, e nunca vai cobrir.** A caixa de senha
+vive no desktop `Winlogon`; nenhum processo de usuário injeta ali, elevado ou
+não. Se o teclado parar de atravessar exatamente quando você clica no campo de
+senha e voltar ao sair dele, é isso: o início automático não está no ar naquela
+máquina, e quem responde é a janela. O log diz a causa (`o teclado e o mouse não
+passam: a tela em foco é o desktop seguro...`).
+
 ### O supervisor e o agente
 
 O supervisor não captura nem injeta nada: ele vive na sessão 0, isolada do

@@ -14,6 +14,7 @@ import base64
 import ctypes
 import inspect
 import io
+import logging
 import pathlib
 import sys
 import time
@@ -1760,6 +1761,69 @@ def teste_sair_da_bandeja() -> None:
            "NAO para o compartilhamento" in da_janela)
 
 
+def teste_recusa_no_desktop_seguro() -> None:
+    """Injecao recusada na tela de senha tem de dizer a causa certa.
+
+    Em 27/09/2026 o PC da esquerda "perdia a conexao" ao clicar no campo de
+    senha da tela de bloqueio, e voltava ao sair dele. O log repetia
+    "SendInput recusou o evento (erro 5) -- falta elevacao?" -- um chute, e
+    errado: nao era elevacao. A caixa de senha vive no desktop `Winlogon`, e
+    NENHUM processo de usuario injeta la', elevado ou nao. So' SYSTEM alcanca,
+    que e' o que o inicio automatico faz. A mensagem mandava procurar no lugar
+    errado.
+    """
+    print("recusa de injecao no desktop seguro")
+    import sessao_win as sw
+
+    injetor = ew.Injetor.__new__(ew.Injetor)
+    injetor._recusas = 0
+
+    registradas: list[str] = []
+
+    class Coletor(logging.Handler):
+        def emit(self, registro):
+            registradas.append(registro.getMessage())
+
+    coletor = Coletor()
+    alvo = logging.getLogger("entrada")
+    alvo.addHandler(coletor)
+    salvo = sw.desktop_de_entrada
+    try:
+        # Como um processo de usuario enxerga o Winlogon: nem abre.
+        sw.desktop_de_entrada = lambda: None
+        injetor._recusar(5)
+        checar("erro 5 no desktop seguro fala em tela de bloqueio/UAC",
+               "bloqueio" in registradas[-1] and "UAC" in registradas[-1])
+        checar("e aponta o inicio automatico como a solucao",
+               "INICIO AUTOMATICO" in registradas[-1])
+        checar("sem mandar procurar elevacao",
+               "elevacao" not in registradas[-1].lower())
+
+        sw.desktop_de_entrada = lambda: "Winlogon"
+        injetor._recusas = 0
+        injetor._recusar(5)
+        checar("nomeia o desktop quando consegue le-lo",
+               "Winlogon" in registradas[-1])
+
+        # Erro 5 com o desktop normal em foco e' outra coisa: nao chutar.
+        sw.desktop_de_entrada = lambda: "Default"
+        injetor._recusas = 0
+        injetor._recusar(5)
+        checar("erro 5 no desktop normal nao vira diagnostico de UAC",
+               "bloqueio" not in registradas[-1], registradas[-1][:50])
+
+        # Uma travessia recusada vira dezenas de eventos.
+        injetor._recusas = 0
+        antes = len(registradas)
+        for _ in range(250):
+            injetor._recusar(87)
+        checar("o log e' raleado (1a e a cada 200)",
+               len(registradas) - antes == 2, len(registradas) - antes)
+    finally:
+        sw.desktop_de_entrada = salvo
+        alvo.removeHandler(coletor)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1796,6 +1860,7 @@ def main() -> int:
     teste_plano_b_explica_a_falha()
     teste_contagem_de_uso()
     teste_sair_da_bandeja()
+    teste_recusa_no_desktop_seguro()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

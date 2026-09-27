@@ -412,13 +412,51 @@ class Injetor:
 
     def __init__(self):
         self.x0, self.y0, self.largura, self.altura = geometria_virtual()
+        self._recusas = 0
 
     def _enviar(self, *entradas: INPUT) -> None:
         vetor = (INPUT * len(entradas))(*entradas)
         enviados = user32.SendInput(len(entradas), vetor, ctypes.sizeof(INPUT))
         if enviados != len(entradas):
-            log.warning("SendInput recusou o evento (erro %d) -- falta elevacao?",
-                        ctypes.get_last_error())
+            self._recusar(ctypes.get_last_error())
+
+    def _recusar(self, erro: int) -> None:
+        """Diz POR QUE o SendInput foi recusado, sem encher o log.
+
+        "falta elevacao?" era um chute, e chute errado na hora errada: a recusa
+        mais comum aqui e' o DESKTOP SEGURO -- a caixa de senha da tela de
+        bloqueio e o prompt de UAC vivem no desktop `Winlogon`, e nenhum
+        processo de usuario injeta ali, elevado ou nao. So' SYSTEM alcanca, e e'
+        por isso que o inicio automatico existe (ver servico.py).
+
+        Como distinguir: se nem da' para ABRIR o desktop de entrada, e' porque
+        ele nao e' nosso -- exatamente o caso do Winlogon visto de uma sessao de
+        usuario. O diagnostico sai do proprio sintoma, em vez de mandar o
+        usuario procurar elevacao que nao resolveria nada.
+        """
+        self._recusas += 1
+        # Uma travessia recusada vira dezenas de eventos; sem ralear, o log
+        # enche e o motivo se perde no meio.
+        if self._recusas != 1 and self._recusas % 200 != 0:
+            return
+        if erro == 5:  # ERROR_ACCESS_DENIED
+            try:
+                import sessao_win
+                entrada = sessao_win.desktop_de_entrada()
+            except Exception:
+                entrada = None
+            if entrada is None or entrada.lower() != "default":
+                log.warning(
+                    "o teclado e o mouse nao passam: a tela em foco e' o "
+                    "desktop seguro do Windows (%s) -- caixa de senha da tela "
+                    "de bloqueio ou prompt de UAC. Nenhum programa de usuario "
+                    "injeta ali. Quem alcanca e' o INICIO AUTOMATICO, que roda "
+                    "como SYSTEM: ligue-o em 'Iniciar com o Windows' e deixe a "
+                    "janela fechada. (%da recusa)",
+                    entrada or "nao consegui nem abrir", self._recusas)
+                return
+        log.warning("SendInput recusou o evento (erro %d; %da recusa)",
+                    erro, self._recusas)
 
     def _mouse(self, flags: int, dx: int = 0, dy: int = 0, dados: int = 0) -> INPUT:
         entrada = INPUT(type=INPUT_MOUSE)
