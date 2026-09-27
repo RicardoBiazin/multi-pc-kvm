@@ -1144,6 +1144,12 @@ def teste_inicio_automatico() -> None:
 
     checar("a tarefa dispara no boot",
            arvore.find(".//t:BootTrigger", NS) is not None)
+    # So' com o gatilho de boot, um supervisor que morresse ficava morto ate' a
+    # maquina ser reiniciada DE VERDADE. Aconteceu em 25/09/2026 no PC da
+    # esquerda: caiu, a tarefa o levantou uma vez, caiu de novo, e passou dois
+    # dias sem ninguem chama-lo.
+    checar("e tambem no logon (maquina que dorme nao da' boot)",
+           arvore.find(".//t:LogonTrigger", NS) is not None)
     checar("como SYSTEM, pelo SID (o nome da conta e' traduzido)",
            campo("UserId") == "S-1-5-18", campo("UserId"))
     checar("com privilegio maximo",
@@ -1157,6 +1163,27 @@ def teste_inicio_automatico() -> None:
     checar("a acao e' o executavel com --servico",
            campo("Command") and "--servico" in campo("Arguments"),
            f"{campo('Command')} {campo('Arguments')}")
+
+    # O juiz de verdade e' o proprio Agendador: carregar a definicao valida
+    # contra o schema dele sem registrar nada (e sem exigir Administrador).
+    # Conferir so' com ElementTree deixaria passar XML bem-formado que o
+    # Windows recusaria na hora de instalar -- e a recusa apareceria no PC do
+    # usuario, nao aqui.
+    try:
+        import win32com.client
+        agendador = win32com.client.Dispatch("Schedule.Service")
+        agendador.Connect()
+        definicao = agendador.NewTask(0)
+        definicao.XmlText = svc.xml_da_tarefa()
+        tipos = {definicao.Triggers.Item(i + 1).Type
+                 for i in range(definicao.Triggers.Count)}
+        checar("o Agendador do Windows aceita a definicao", True)
+        checar("e enxerga os dois gatilhos (8=boot, 9=logon)",
+               tipos == {8, 9}, str(sorted(tipos)))
+        checar("com privilegio maximo (RunLevel 1)",
+               definicao.Principal.RunLevel == 1)
+    except Exception as exc:
+        checar("o Agendador do Windows aceita a definicao", False, str(exc)[:70])
 
     # Ler o desktop de entrada e' o que decide relancar ou nao. Se voltasse um
     # nome diferente do desktop do proprio processo, o agente sairia em laco.

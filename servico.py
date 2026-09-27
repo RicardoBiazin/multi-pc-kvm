@@ -133,7 +133,16 @@ def xml_da_tarefa() -> str:
       * `DisallowStartIfOnBatteries` false -- senao um notebook na bateria
         simplesmente nao subiria.
       * `MultipleInstancesPolicy` IgnoreNew -- o Run da instalacao nao pode
-        criar um segundo supervisor ao lado do que ja' esta' no ar.
+        criar um segundo supervisor ao lado do que ja' esta' no ar. E' tambem o
+        que deixa somar gatilhos sem risco: o segundo a disparar nao duplica
+        nada.
+      * DOIS gatilhos, boot E logon. So' com o de boot, um supervisor que
+        morresse ficava morto ate' a maquina ser reiniciada DE VERDADE -- e
+        maquina que dorme e acorda, ou que desliga com o Inicio Rapido do
+        Windows, pode passar dias sem um boot que conte. Aconteceu no PC da
+        esquerda em 25/09/2026: o supervisor caiu, a tarefa o levantou uma vez,
+        ele caiu de novo e ninguem mais o chamou. O logon cobre todo caminho
+        que termina com alguem na frente da maquina.
     """
     executavel, argumentos = _binario()
     return f"""<?xml version="1.0" encoding="UTF-16"?>
@@ -146,6 +155,9 @@ def xml_da_tarefa() -> str:
     <BootTrigger>
       <Enabled>true</Enabled>
     </BootTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -342,7 +354,8 @@ def _encerrar_tudo() -> None:
     ninguem. O job object leva o agente junto quando o supervisor morre.
 
     Nao desregistra a tarefa: fechar hoje nao deve significar nunca mais
-    ligar sozinho. Para desligar de vez, a janela tem "Iniciar com o Windows".
+    ligar sozinho. Ela volta no proximo boot ou logon -- e' o que o rotulo do
+    menu promete. Para desligar de vez, a janela tem "Iniciar com o Windows".
     """
     log.info("Sair pedido pela bandeja: parando a tarefa de inicio automatico")
     try:
@@ -428,7 +441,7 @@ def rodar_agente(cfg: dict) -> int:
         if bandeja.criar(_abrir_janela, _encerrar_tudo, m, acoes=True,
                          titulo="inicio automatico",
                          rotulo_abrir="Abrir configuracao",
-                         rotulo_sair="Sair (volta no proximo boot)") is None:
+                         rotulo_sair="Sair (volta no proximo logon)") is None:
             log.info("sem icone na bandeja (pystray indisponivel)")
     except Exception:
         log.warning("nao consegui por o icone na bandeja", exc_info=True)

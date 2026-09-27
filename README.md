@@ -98,6 +98,7 @@ Não é firula de arquitetura — é o único jeito de chegar lá:
 | | `HKCU\...\Run` | Tarefa no boot como SYSTEM |
 |---|---|---|
 | Roda antes do login | não | **sim** |
+| Volta sozinho depois de cair | não | **sim** — gatilhos de boot **e** de logon |
 | Roda pedindo elevação | **não** — o Windows descarta em silêncio, porque não há como mostrar UAC no logon | sim, é SYSTEM: não há prompt a mostrar |
 | Alcança o desktop `Winlogon` (tela de bloqueio) | não | **sim** |
 
