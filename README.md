@@ -363,6 +363,13 @@ reinstala. Sem isso o programa fica aberto sem funcionar e sem dizer por quê.
 
 ## Quando não funcionar
 
+**`FileNotFoundError ... _MEIxxxxxase_library.zip`** — o pacote do `.exe`
+(que o `--onefile` extrai no `%TEMP%`) foi apagado com o programa rodando, por
+alguma limpeza de temporários. **Feche e abra**: ele se extrai de novo. Desde a
+2.2.5 o programa detecta isso ao abrir e escreve `PACOTE INCOMPLETO` no log em
+vez de quebrar mais adiante.
+
+
 No painel *Registro*, o botão **Gerar relatório para compartilhar** cria um
 `.txt` **na pasta onde o programa está** com tudo o que serve para achar o
 problema:

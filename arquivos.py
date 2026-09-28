@@ -31,6 +31,13 @@ import struct
 import time
 
 import configuracao as conf
+# No topo, e nao dentro da funcao: com `--onefile`, `import` la' embaixo le' do
+# pacote extraido em %TEMP%, e esse pacote pode ter sumido POR BAIXO de um
+# processo vivo (28/09/2026: sobraram so' os DLL travados). O programa morria
+# no meio de uma copia de arquivo, com FileNotFoundError em base_library.zip.
+# Importando na carga, uma instalacao quebrada aparece ao ABRIR, nao na hora em
+# que o usuario esta' colando algo.
+import sessao_win
 
 log = logging.getLogger("arquivos")
 
@@ -183,7 +190,6 @@ def pasta_de_recebidos() -> pathlib.Path:
     """
     base = None
     try:
-        import sessao_win
         base = sessao_win.appdata_do_usuario_do_console()
     except Exception:
         log.debug("sem o %APPDATA% do usuario do console", exc_info=True)

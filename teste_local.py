@@ -1851,6 +1851,75 @@ def teste_recusa_no_desktop_seguro() -> None:
         alvo.removeHandler(coletor)
 
 
+def teste_pacote_apagado_por_baixo() -> None:
+    """O pacote do --onefile pode sumir com o programa rodando.
+
+    28/09/2026: a pasta de extracao (%TEMP%\_MEIxxxxx) foi apagada com o
+    processo vivo. Sobraram exatamente os 28 DLL/pyd que o Windows mantem
+    TRAVADOS enquanto carregados; todo o resto -- base_library.zip inclusive --
+    se foi. A partir dali qualquer import tardio morre, e morreu no meio de uma
+    copia de arquivo. Limpador de temporarios faz isso sem avisar, e este
+    programa fica DIAS no ar.
+
+    Duas defesas: nao ter import tardio nos caminhos que o usuario aciona, e
+    dizer a verdade quando o pacote ja' esta' mutilado.
+    """
+    print("pacote do executavel apagado por baixo")
+    import tempfile
+
+    import app as aplicativo
+
+    # Rodando do fonte nao ha' pacote nenhum para conferir.
+    checar("fora do .exe, nao inventa problema",
+           aplicativo.conferir_o_proprio_pacote() == "")
+
+    congelado = getattr(sys, "frozen", False)
+    meipass = getattr(sys, "_MEIPASS", None)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            sys.frozen = True
+            sys._MEIPASS = tmp
+            aviso = aplicativo.conferir_o_proprio_pacote()
+            checar("pacote sem base_library.zip e' denunciado", bool(aviso))
+            checar("e o aviso diz o que fazer",
+                   "FECHE E ABRA" in aviso, aviso[:60])
+            (pathlib.Path(tmp) / "base_library.zip").write_bytes(b"x")
+            checar("pacote inteiro nao gera aviso",
+                   aplicativo.conferir_o_proprio_pacote() == "")
+    finally:
+        if congelado:
+            sys.frozen = congelado
+        else:
+            del sys.frozen
+        if meipass is None:
+            del sys._MEIPASS
+        else:
+            sys._MEIPASS = meipass
+
+    # Os caminhos que o usuario aciona nao podem depender de import tardio.
+    # Pela ARVORE, e nao pela indentacao: `import` no topo dentro de um `try`
+    # tambem vem indentado, e contar essa linha como falha seria alarme falso
+    # (a primeira versao deste teste caiu nisso).
+    import ast as _ast
+
+    def imports_dentro_de_funcao(caminho: str) -> list[str]:
+        arvore = _ast.parse(pathlib.Path(caminho).read_text(encoding="utf-8"))
+        achados = []
+        for no in _ast.walk(arvore):
+            if not isinstance(no, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                continue
+            for dentro in _ast.walk(no):
+                if isinstance(dentro, (_ast.Import, _ast.ImportFrom)):
+                    nomes = [a.name for a in getattr(dentro, "names", [])]
+                    achados.append(f"{no.name}: {', '.join(nomes)}")
+        return achados
+
+    for arquivo in ("arquivos.py", "clipboard_win.py"):
+        dentro = imports_dentro_de_funcao(arquivo)
+        checar(f"{arquivo} sem import dentro de funcao", not dentro,
+               str(dentro[:2]))
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1888,6 +1957,7 @@ def main() -> int:
     teste_contagem_de_uso()
     teste_sair_da_bandeja()
     teste_recusa_no_desktop_seguro()
+    teste_pacote_apagado_por_baixo()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

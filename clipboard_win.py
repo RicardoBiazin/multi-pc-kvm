@@ -25,6 +25,15 @@ from PIL import Image
 
 import arquivos
 
+# Carregado aqui, e nao dentro de `_ler_por_ole`: com `--onefile` um import
+# tardio le' do pacote extraido em %TEMP%, que pode ter sido apagado por baixo
+# de um processo vivo. O plano B do clipboard nao pode ser mais uma fonte de
+# surpresa -- se o pythoncom nao veio, isso se sabe na carga.
+try:
+    import pythoncom
+except ImportError:  # pragma: sem COM, o plano B do OLE simplesmente nao existe
+    pythoncom = None
+
 log = logging.getLogger("clipboard")
 
 TETO_IMAGEM = 8 * 1024 * 1024  # PNG maior que isso e' descartado
@@ -189,9 +198,7 @@ def _ler_por_ole() -> dict | None:
     Devolve None em qualquer tropeco -- isto e' um plano B, nao pode virar mais
     uma fonte de falha.
     """
-    try:
-        import pythoncom
-    except ImportError:
+    if pythoncom is None:
         return None
     try:
         # Barato e idempotente na mesma thread; a thread de rede tambem chega

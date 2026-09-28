@@ -47,6 +47,34 @@ def configurar_log(nome_do_pc: str, verboso: bool, parte: str = "") -> None:
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
+def conferir_o_proprio_pacote() -> str:
+    """Avisa quando o pacote do `--onefile` sumiu por baixo de nos.
+
+    Em 28/09/2026 a pasta de extracao (%TEMP%\\_MEIxxxxx) foi apagada com o
+    programa RODANDO: sobraram so' os 28 DLL que o Windows mantem travados
+    enquanto carregados, e todo o resto -- base_library.zip inclusive -- se foi.
+    A partir dali qualquer import tardio morre, e morreu: FileNotFoundError no
+    meio de uma copia de arquivo.
+
+    Um limpador de temporarios (Limpeza de Disco, Sensor de Armazenamento,
+    antivirus) faz isso sem avisar em programa que fica dias no ar -- e este
+    fica. Detectar e' barato e a saida e' simples: reabrir.
+    """
+    if not getattr(sys, "frozen", False):
+        return ""
+    pasta = getattr(sys, "_MEIPASS", "")
+    if not pasta:
+        return ""
+    import pathlib
+    faltando = [n for n in ("base_library.zip",)
+                if not (pathlib.Path(pasta) / n).exists()]
+    if not faltando:
+        return ""
+    return (f"o pacote deste executavel sumiu de {pasta} enquanto ele rodava "
+            f"(falta {', '.join(faltando)}). Alguma limpeza de temporarios "
+            f"passou por cima. FECHE E ABRA o programa: ele se extrai de novo")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--sem-janela", action="store_true",
@@ -95,6 +123,9 @@ def main() -> int:
         log.info("%.0f%% do retangulo do desktop nao esta' em tela nenhuma; o "
                  "cursor sera' puxado para a tela mais proxima nesses pedacos",
                  100 * (1 - area / (largura * altura)))
+    pacote = conferir_o_proprio_pacote()
+    if pacote:
+        log.error("PACOTE INCOMPLETO: %s", pacote)
     if aviso_de_identidade:
         log.error("IDENTIDADE: %s", aviso_de_identidade)
     log.info("configuracao: %s", conf.caminho_config())
