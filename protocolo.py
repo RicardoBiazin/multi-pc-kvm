@@ -56,6 +56,7 @@ class Conexao:
         self.fernet = fernet
         self._lock_envio = threading.Lock()
         self._fechada = False
+        self.motivo_do_fecho = ""
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         # Só o ENVIO ganha teto (ver TIMEOUT_ENVIO_MS). No Windows o SO_SNDTIMEO
         # e' um DWORD em milissegundos; best-effort para nao quebrar em outros SO.
@@ -101,9 +102,18 @@ class Conexao:
             raise ErroProtocolo("frame com chave invalida ou corrompido") from exc
         return json.loads(dados)
 
-    def fechar(self) -> None:
+    def fechar(self, motivo: str = "") -> None:
+        """Fecha a conexao. `motivo` fica registrado para quem for relatar.
+
+        Fechar o socket e' tambem como se ACORDA um `receber` pendurado -- e o
+        despertar chega na outra thread como WinError 10038 ("operacao num item
+        que nao e' um socket"). Sem saber que o fecho foi nosso, quem relata
+        registra esse 10038 como se fosse uma falha inexplicada de rede. Ja'
+        custou diagnostico duas vezes neste projeto.
+        """
         if self._fechada:
             return
+        self.motivo_do_fecho = motivo
         self._fechada = True
         try:
             self.sock.shutdown(socket.SHUT_RDWR)

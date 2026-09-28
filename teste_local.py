@@ -682,14 +682,21 @@ def teste_watchdog_devolve_comando() -> None:
     checar("cursor foi para C", ctl.atual == "C")
 
     class FakeConn:
-        def __init__(self): self.fechado = False
-        def fechar(self): self.fechado = True
+        def __init__(self):
+            self.fechado = False
+            self.motivo_do_fecho = ""
+
+        def fechar(self, motivo: str = ""):
+            self.fechado = True
+            self.motivo_do_fecho = motivo
 
     conn = FakeConn()
     srv.clientes["C"] = conn
     srv.ultimo_pong["C"] = 0.0  # muito antigo -> travado para o watchdog
 
     srv._derrubar("C", conn, "parou de responder (teste)")
+    checar("o fecho fica marcado como nosso",
+           "derrubado por nos" in conn.motivo_do_fecho, conn.motivo_do_fecho)
     checar("comando voltou ao servidor", ctl.atual == "B")
     checar("C saiu da lista de clientes", "C" not in srv.clientes)
     checar("socket do C foi fechado", conn.fechado is True)
@@ -1920,6 +1927,53 @@ def teste_pacote_apagado_por_baixo() -> None:
                str(dentro[:2]))
 
 
+def teste_queda_relatada_pela_causa() -> None:
+    """Queda provocada por nos nao pode ser relatada como falha de rede.
+
+    Par visto no log em 28/09/2026:
+
+        'PC-esq' parou de responder (8s sem resposta) -- comando de volta
+        'PC-esq' desconectou: [WinError 10038] ... item que nao e' um soquete
+
+    A segunda linha e' CONSEQUENCIA da primeira: o watchdog fecha o socket de
+    proposito, e fechar e' justamente como se acorda um `receber` pendurado --
+    o despertar chega na outra thread como 10038. Relatado assim, manda quem
+    le' procurar cabo e firewall, quando a causa ja' esta' na linha de cima.
+    Custou diagnostico duas vezes neste projeto.
+    """
+    print("queda relatada pela causa, nao pelo sintoma")
+    import inspect
+
+    import protocolo as proto
+    import servidor as srv
+
+    conexao = proto.Conexao.__new__(proto.Conexao)
+    conexao._fechada = False
+    conexao.motivo_do_fecho = ""
+    checar("conexao nasce sem motivo de fecho", conexao.motivo_do_fecho == "")
+
+    class SocketFalso:
+        def shutdown(self, _como): pass
+        def close(self): pass
+
+    conexao.sock = SocketFalso()
+    conexao.fechar("derrubado por nos: parou de responder (9s sem resposta)")
+    checar("fechar guarda o motivo", "derrubado por nos" in conexao.motivo_do_fecho)
+    conexao.fechar("outro motivo qualquer")
+    checar("fechar de novo nao reescreve o motivo original",
+           "parou de responder" in conexao.motivo_do_fecho)
+
+    fonte = inspect.getsource(srv.Servidor._receber_cliente)
+    checar("quem relata a queda consulta o motivo",
+           "motivo_do_fecho" in fonte)
+
+    vigia = inspect.getsource(srv.Servidor._vigiar)
+    checar("o watchdog mede o silencio de verdade",
+           "silencio" in vigia and "limite" in vigia)
+    checar("e nao repete so' o limite como se fosse a medida",
+           vigia.count("TIMEOUT_SEM_RESPOSTA") >= 2)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -1958,6 +2012,7 @@ def main() -> int:
     teste_sair_da_bandeja()
     teste_recusa_no_desktop_seguro()
     teste_pacote_apagado_por_baixo()
+    teste_queda_relatada_pela_causa()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

@@ -363,6 +363,13 @@ reinstala. Sem isso o programa fica aberto sem funcionar e sem dizer por quê.
 
 ## Quando não funcionar
 
+**`'X' desconectou: [WinError 10038] ... não é um soquete`** logo depois de
+`parou de responder` — a segunda linha é *consequência* da primeira, não uma
+falha de rede: o watchdog fecha o socket de propósito, e fechar é como se acorda
+um `receber` pendurado. Desde a 2.2.6 a queda é relatada pela causa
+(`derrubado por nós: ...`) e o watchdog informa o silêncio **medido**, não o
+limite. O que investigar é por que o outro PC ficou mudo.
+
 **`FileNotFoundError ... _MEIxxxxxase_library.zip`** — o pacote do `.exe`
 (que o `--onefile` extrai no `%TEMP%`) foi apagado com o programa rodando, por
 alguma limpeza de temporários. **Feche e abra**: ele se extrai de novo. Desde a

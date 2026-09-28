@@ -236,7 +236,16 @@ class Servidor:
                 msg = conn.receber()
                 self._tratar(nome, msg)
         except Exception as exc:
-            log.info("'%s' desconectou: %s", nome, exc)
+            # Quando fomos NOS que fechamos (watchdog, encerramento), o erro que
+            # sobe aqui e' so' o `receber` sendo acordado -- tipicamente
+            # WinError 10038. Relatar isso como falha de rede manda quem le' o
+            # log procurar cabo e firewall, quando a causa ja' foi registrada
+            # na linha de cima.
+            motivo = getattr(conn, "motivo_do_fecho", "")
+            if motivo:
+                log.info("'%s' desconectou: %s", nome, motivo)
+            else:
+                log.info("'%s' desconectou: %s", nome, exc)
         finally:
             with self._lock:
                 if self.clientes.get(nome) is conn:
@@ -359,7 +368,7 @@ class Servidor:
                 caiu = True
         if caiu:
             log.warning("'%s' %s -- comando de volta ao servidor", nome, motivo)
-            conn.fechar()
+            conn.fechar(f"derrubado por nos: {motivo}")
             self.ao_mudar()
 
     def _vigiar(self) -> None:
@@ -375,7 +384,14 @@ class Servidor:
         while not self.parar.wait(INTERVALO_WATCHDOG):
             agora = time.monotonic()
             with self._lock:
-                mortos = [(nome, conn) for nome, conn in self.clientes.items()
+                mortos = [(nome, conn, agora - self.ultimo_pong.get(nome, agora))
+                          for nome, conn in self.clientes.items()
                           if agora - self.ultimo_pong.get(nome, agora) > TIMEOUT_SEM_RESPOSTA]
-            for nome, conn in mortos:
-                self._derrubar(nome, conn, f"parou de responder ({TIMEOUT_SEM_RESPOSTA:.0f}s sem resposta)")
+            for nome, conn, silencio in mortos:
+                # O SILENCIO MEDIDO, e nao o limite: "8s sem resposta" era o
+                # mesmo texto para um cliente que sumiu por 9s e para um que
+                # sumiu por 300s, e a diferenca entre os dois e' exatamente o
+                # que se quer saber depois.
+                self._derrubar(nome, conn,
+                               f"parou de responder ({silencio:.0f}s sem "
+                               f"resposta; limite {TIMEOUT_SEM_RESPOSTA:.0f}s)")
