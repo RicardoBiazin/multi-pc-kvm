@@ -2024,6 +2024,68 @@ def teste_retomada_exige_gesto() -> None:
            ctl.comandante == "A", ctl.comandante)
 
 
+def teste_uma_janela_por_vez() -> None:
+    """Clicar no icone da bandeja nao pode abrir uma janela por clique.
+
+    30/09/2026: tres processos no Gerenciador de Tarefas e o log anunciando o
+    mesmo PC na rede duas vezes. As janelas nascem como SYSTEM e nem sempre
+    aparecem na frente de quem clicou, entao a reacao natural e' clicar de
+    novo. Cada uma tentava iniciar o motor e esbarrava na trava de instancia
+    unica -- que o usuario viu como a caixa vermelha "Nao consegui iniciar".
+    """
+    print("uma janela de configuracao por vez")
+    import inspect
+
+    import servico as svc
+
+    lancadas: list = []
+
+    class ProcessoVivo:
+        def Close(self):
+            pass
+
+    salvo_lancar = svc.sessao_win.lancar_na_sessao
+    salvo_esperar = svc.sessao_win.esperar
+    salvo_sessao = svc.sessao_win.sessao_do_console
+    vivo = [True]
+    try:
+        svc.sessao_win.sessao_do_console = lambda: 1
+        svc.sessao_win.esperar = lambda _p, _s: None if vivo[0] else 0
+        svc.sessao_win.lancar_na_sessao = (
+            lambda *a, **k: lancadas.append(k.get("o_que", "?")) or ProcessoVivo())
+        svc._janela_aberta = None
+
+        svc._abrir_janela()
+        checar("o primeiro clique abre a janela", len(lancadas) == 1)
+        checar("e o log diz que e' JANELA, nao agente",
+               lancadas == ["janela"], str(lancadas))
+
+        svc._abrir_janela()
+        svc._abrir_janela()
+        checar("cliques seguintes nao abrem outra", len(lancadas) == 1,
+               f"{len(lancadas)} janela(s)")
+
+        # Fechada a janela, o icone volta a abrir uma.
+        vivo[0] = False
+        svc._abrir_janela()
+        checar("depois de fechada, abre de novo", len(lancadas) == 2)
+    finally:
+        svc.sessao_win.lancar_na_sessao = salvo_lancar
+        svc.sessao_win.esperar = salvo_esperar
+        svc.sessao_win.sessao_do_console = salvo_sessao
+        svc._janela_aberta = None
+
+    # "Ja' esta' rodando" nao e' falha: nao pode sair como caixa de erro.
+    fonte = pathlib.Path("interface.py").read_text(encoding="utf-8")
+    checar("a trava de instancia vira aviso, nao erro",
+           "except motor.JaRodando" in fonte and "showinfo" in fonte)
+
+    # O Gerenciador de Tarefas mostra a FileDescription: o nome vem primeiro.
+    empacotador = pathlib.Path("empacotar.py").read_text(encoding="utf-8")
+    checar("o Gerenciador de Tarefas mostra o nome do programa",
+           "'{conf.APP} -- um teclado" in empacotador)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -2064,6 +2126,7 @@ def main() -> int:
     teste_pacote_apagado_por_baixo()
     teste_queda_relatada_pela_causa()
     teste_retomada_exige_gesto()
+    teste_uma_janela_por_vez()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

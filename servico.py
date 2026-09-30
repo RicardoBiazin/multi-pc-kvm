@@ -366,6 +366,9 @@ def _encerrar_tudo() -> None:
         raise SystemExit(0)
 
 
+_janela_aberta = None  # processo da janela que a bandeja abriu, se viva
+
+
 def _abrir_janela() -> None:
     """Abre a janela de configuracao a partir do icone da bandeja.
 
@@ -378,16 +381,28 @@ def _abrir_janela() -> None:
     nenhum, porque a trava de instancia unica e o proprio aviso da janela
     cuidam disso (ver motor.JaRodando e interface._iniciar).
     """
+    global _janela_aberta
     sessao = sessao_win.sessao_do_console()
     if sessao is None:
         log.warning("sem sessao no console; nao da' para abrir a janela")
         return
+    # UMA janela por vez. Sem isto, cada clique no icone abria mais uma -- e
+    # como elas nascem como SYSTEM, nem sempre aparecem na frente de quem
+    # clicou, entao a reacao natural e' clicar de novo. Em 30/09/2026 isso
+    # rendeu tres processos e duas janelas anunciando o mesmo PC na rede, cada
+    # uma tentando iniciar o motor e esbarrando na trava de instancia unica --
+    # que o usuario viu como "Nao consegui iniciar".
+    if _janela_aberta is not None:
+        if sessao_win.esperar(_janela_aberta, 0) is None:
+            log.info("a janela de configuracao ja' esta' aberta")
+            return
+        _janela_aberta.Close()
+        _janela_aberta = None
     executavel, _ = _binario()
     desktop = sessao_win.meu_desktop() or DESKTOP_PADRAO
     try:
-        processo = sessao_win.lancar_na_sessao(
-            sessao, desktop, executavel, f'"{executavel}"')
-        processo.Close()
+        _janela_aberta = sessao_win.lancar_na_sessao(
+            sessao, desktop, executavel, f'"{executavel}"', o_que="janela")
         log.info("janela de configuracao aberta pela bandeja")
     except Exception:
         log.warning("nao consegui abrir a janela pela bandeja", exc_info=True)

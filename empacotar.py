@@ -40,7 +40,7 @@ def gerar_versao() -> pathlib.Path:
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', {conf.AUTOR!r}),
       StringStruct('FileDescription',
-                   'Um teclado e um mouse para varios PCs na mesma rede'),
+                   '{conf.APP} -- um teclado e um mouse para varios PCs'),
       StringStruct('FileVersion', {conf.VERSAO!r}),
       StringStruct('ProductName', {conf.APP!r}),
       StringStruct('ProductVersion', {conf.VERSAO!r}),

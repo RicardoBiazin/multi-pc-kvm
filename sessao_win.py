@@ -154,7 +154,7 @@ def _token_do_system_para(sessao: int):
 
 
 def lancar_na_sessao(sessao: int, desktop: str, executavel: str,
-                     linha_de_comando: str):
+                     linha_de_comando: str, o_que: str = "agente"):
     """Sobe o executavel como SYSTEM, na `sessao`, anexado a `desktop`.
 
     Devolve o handle do processo (para esperar por ele) ou levanta a excecao do
@@ -170,7 +170,11 @@ def lancar_na_sessao(sessao: int, desktop: str, executavel: str,
             win32con.CREATE_NO_WINDOW | win32con.CREATE_UNICODE_ENVIRONMENT,
             ambiente, None, inicio)
         thread.Close()
-        log.info("agente %d lancado na sessao %d, desktop %s", pid, sessao,
+        # `o_que` existe porque esta funcao tambem lanca a JANELA, e dizer
+        # "agente lancado" ali mandou o diagnostico para o lado errado: parecia
+        # que o supervisor estava relancando o agente em laco, quando eram
+        # janelas abrindo.
+        log.info("%s %d lancado na sessao %d, desktop %s", o_que, pid, sessao,
                  desktop)
         return processo
     finally:

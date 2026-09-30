@@ -1042,6 +1042,15 @@ class Janela(tk.Tk):
         conf.salvar(self.cfg)
         try:
             self.motor.iniciar(self.cfg)
+        except motor.JaRodando as exc:
+            # Nao e' falha: e' a trava de instancia unica fazendo o trabalho
+            # dela. Mostrar caixa VERMELHA de erro para isso assusta a` toa e
+            # sugere que algo quebrou, quando o programa esta' funcionando --
+            # noutro processo.
+            messagebox.showinfo(
+                conf.APP, f"{exc}.\n\nEsta janela e' so' para configurar; "
+                            f"quem esta' compartilhando teclado e mouse e' o "
+                            f"inicio automatico.")
         except Exception as exc:
             messagebox.showerror(conf.APP, f"Nao consegui iniciar:\n{exc}")
             return
