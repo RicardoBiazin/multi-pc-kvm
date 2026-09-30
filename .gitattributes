@@ -1,0 +1,5 @@
+# .bat SEMPRE com CRLF. Com LF sozinho o cmd.exe interpreta mal o `^` de
+# continuacao de linha -- e o arquivo que vai no Release sai do checkout do
+# runner da CI, cujo core.autocrlf nao e' nosso para decidir.
+*.bat text eol=crlf
+*.cmd text eol=crlf

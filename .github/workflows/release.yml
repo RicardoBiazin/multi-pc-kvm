@@ -84,8 +84,13 @@ jobs:
           echo "" >> NOTES.md
           echo "Baixe o \`MultiPC-KVM.exe\` abaixo e copie **o mesmo arquivo** para cada PC." >> NOTES.md
           echo "Não leve o \`config.json\` junto: ele carrega a identidade da máquina de origem." >> NOTES.md
+          echo "" >> NOTES.md
+          echo "Depois de trocar o \`.exe\`, rode o \`ligar-inicio-automatico.bat\` (pede Administrador sozinho)." >> NOTES.md
 
       - name: Publicar o Release com o executavel
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file NOTES.md "dist/MultiPC-KVM.exe"
+        # O .bat vai junto: e' o que liga o inicio automatico no OUTRO PC sem
+        # abrir Prompt de Comando como Administrador -- e precisa chegar la'
+        # pelo mesmo download que o .exe.
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file NOTES.md "dist/MultiPC-KVM.exe" "ligar-inicio-automatico.bat"

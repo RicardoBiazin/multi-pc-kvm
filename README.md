@@ -190,6 +190,11 @@ O `config.json` ao lado do `.exe` contém a **chave compartilhada** e fica
 legível para quem tem acesso àquela pasta — no `%APPDATA%` era só seu. Se isso
 importar na sua máquina, ponha o `.exe` numa pasta com permissão restrita.
 
+Para pôr no ar sem reiniciar — depois de trocar o `.exe`, por exemplo —, dê um
+duplo clique em **`ligar-inicio-automatico.bat`** (vem no Release, ao lado do
+`.exe`). Ele pede Administrador sozinho, confere se a tarefa existe, dispara e
+mostra o estado.
+
 Para conferir ou mexer pela linha de comando:
 
 ```
