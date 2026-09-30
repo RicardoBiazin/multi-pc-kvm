@@ -42,6 +42,12 @@ controlar, e o teclado e o mouse dele passam a mandar nos dois.
 Um cliente sem teclado e mouse próprios não muda em nada: ele simplesmente nunca
 pede o comando.
 
+**Para retomar o comando**, mexa no teclado ou no mouse deste PC. Tecla e clique
+valem na hora. Movimento de mouse precisa de um **gesto** (~40 px somados), e
+não de um toque: cada PC tem o seu mouse parado na mesa, e sensor óptico gera
+deslocamento sozinho — antes disso um único pixel bastava, e quem estava usando
+o outro PC perdia o comando no mesmo segundo em que o pegava.
+
 ## Instalação
 
 Baixe o `MultiPC-KVM.exe` em [Releases](../../releases), ou compile do código com

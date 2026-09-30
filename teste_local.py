@@ -1094,6 +1094,9 @@ def teste_comando_no_servidor() -> None:
     enviados.clear()
     checar("input fisico daqui nao e' engolido",
            ctl.tratar({"t": "mv", "pos": (600, 500)}) is False)
+    checar("mas UM tremor de mouse nao rouba o comando", ctl.comandante == "A")
+    # Um gesto de verdade: mais que LIMIAR_RETOMADA px somados.
+    ctl.tratar({"t": "mv", "pos": (600 + borda.LIMIAR_RETOMADA + 5, 500)})
     checar("e o comando volta para o servidor", ctl.comandante == "B")
     checar("A foi avisado de que perdeu o comando",
            any(d == "A" and m.get("t") == "comando" and m.get("ok") is False
@@ -1974,6 +1977,53 @@ def teste_queda_relatada_pela_causa() -> None:
            vigia.count("TIMEOUT_SEM_RESPOSTA") >= 2)
 
 
+def teste_retomada_exige_gesto() -> None:
+    """Ruido do mouse parado na mesa nao pode roubar o comando do outro PC.
+
+    Log de 30/09/2026, dez vezes seguidas e sempre no MESMO segundo:
+
+        o teclado e o mouse de 'PC-esq' assumiram o comando
+        comando de volta para 'DESKTOP-FS65BNN' (mexeram no teclado/mouse ...)
+
+    O 'PC-esq' nunca conseguia usar o proprio mouse. Qualquer evento fisico
+    daqui retomava o comando -- inclusive um `mv` de UM pixel, e cada PC tem o
+    seu mouse parado na mesa, onde sensor optico gera deslocamento sozinho.
+    """
+    print("retomada de comando exige gesto, nao ruido")
+    borda.ew.mover_cursor = lambda x, y: None
+    enviados: list = []
+    ctl = borda.Controle(_layout_de_teste(), "B",
+                         lambda destino, msg: enviados.append((destino, msg)))
+    ctl.conectados.update({"A", "C", "D"})
+    ctl.pedir_comando("A", "direita", 0.5)
+    checar("o outro PC assumiu", ctl.comandante == "A")
+
+    # Tremor: varios eventos, deslocamento minimo, somando menos que o limiar.
+    for n in range(8):
+        ctl.tratar({"t": "mv", "pos": (500 + (n % 2), 400)})
+    checar("tremor nao tira o comando de quem esta' usando",
+           ctl.comandante == "A", ctl.comandante)
+
+    # Gesto: um arrasto claro.
+    ctl.tratar({"t": "mv", "pos": (500 + borda.LIMIAR_RETOMADA + 10, 400)})
+    checar("arrasto de verdade retoma", ctl.comandante == "B")
+
+    # Tecla e clique sao intencao: valem na hora, sem limiar nenhum.
+    for evento, nome in (({"t": "key", "vk": 65, "down": True}, "tecla"),
+                         ({"t": "btn", "b": "esq", "down": True}, "clique")):
+        ctl.pedir_comando("A", "direita", 0.5)
+        checar(f"o outro assumiu (antes do {nome})", ctl.comandante == "A")
+        ctl.tratar(evento)
+        checar(f"{nome} retoma na hora, sem limiar", ctl.comandante == "B")
+
+    # A medicao recomeca a cada troca de mao: sobra de gesto anterior nao pode
+    # derrubar o proximo comando no primeiro tremor.
+    ctl.pedir_comando("A", "direita", 0.5)
+    ctl.tratar({"t": "mv", "pos": (900, 700)})
+    checar("a medicao zera quando o comando troca de mao",
+           ctl.comandante == "A", ctl.comandante)
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -2013,6 +2063,7 @@ def main() -> int:
     teste_recusa_no_desktop_seguro()
     teste_pacote_apagado_por_baixo()
     teste_queda_relatada_pela_causa()
+    teste_retomada_exige_gesto()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

@@ -42,6 +42,11 @@ log = logging.getLogger("borda")
 
 TRAVA_APOS_RETORNO = 0.4  # s ignorando a borda, para nao reentrar em seguida
 MARGEM = 4  # px dentro da tela onde o cursor reaparece
+# Quanto este mouse precisa andar (soma de |dx|+|dy|, em pixels) para
+# tomar de volta um comando que esta' com outro PC. Tecla e botao nao
+# passam por aqui: sao intencao e valem na hora. Isto e' so' contra ruido
+# de sensor optico de mouse parado na mesa -- ver `_input_e_deliberado`.
+LIMIAR_RETOMADA = 40
 
 # Destino interno: nao vai para a rede, e' uma acao no proprio servidor.
 LOCAL = "\x00local"
@@ -78,6 +83,10 @@ class Controle:
         # ponto que sabe o DESTINO de cada evento. Padrao inofensivo: sem
         # contador ligado, nao custa nada e nao muda nada.
         self.contar = lambda pc, ev: None
+        # Quanto este mouse ja' andou desde que OUTRO PC assumiu o comando.
+        # Ver `_input_e_deliberado`.
+        self._pos_da_retomada: tuple[int, int] | None = None
+        self._andado_da_retomada = 0
         self._liberado_em = 0.0
         self._engolidas: set[int] = set()
 
@@ -202,6 +211,9 @@ class Controle:
         if self.comandante != origem:
             anterior = self.comandante
             self.comandante = origem
+            # Outro PC assumiu: a medicao do gesto de retomada recomeca
+            # do zero (ver `_input_e_deliberado`).
+            self._zerar_retomada()
             if anterior != self.eu:
                 self.enfileirar(anterior, {"t": "comando", "ok": False,
                                            "motivo": f"'{origem}' assumiu o comando"})
@@ -226,6 +238,7 @@ class Controle:
         if anterior == self.eu:
             return
         self.comandante = self.eu
+        self._zerar_retomada()
         self.alvo.parar()
         if avisar:
             self.enfileirar(anterior, {"t": "comando", "ok": False,
@@ -353,7 +366,8 @@ class Controle:
         # comanda e' outro, mexer aqui traz o comando de volta -- e' o unico
         # jeito de o dono deste teclado retomar o que e' dele.
         if self.comandante != self.eu:
-            self._comando_volta_por_input()
+            if self._input_e_deliberado(ev):
+                self._comando_volta_por_input()
             return False
 
         if tipo == "key":
@@ -379,6 +393,36 @@ class Controle:
         self.contar(self.atual, ev)
         self.enfileirar(self.atual, ev)
         return True
+
+    def _input_e_deliberado(self, ev: dict) -> bool:
+        """Vale a pena tomar o comando de volta por causa DESTE evento?
+
+        Tecla, botao e roda sao intencao: quem os produziu quis fazer alguma
+        coisa aqui, e o comando volta na hora.
+
+        Movimento de mouse, nao necessariamente. Cada PC tem o seu mouse parado
+        na mesa, e sensor optico gera deslocamento sozinho -- uma trepidacao, um
+        esbarrao, a mesa balancando. Antes disto UM pixel bastava, e o log de
+        30/09/2026 mostra o estrago: dez vezes seguidas o 'PC-esq' assumiu o
+        comando e o perdeu NO MESMO SEGUNDO, sem nunca conseguir usar. Quem
+        estava do outro lado via o proprio mouse falhando sem motivo.
+
+        Entao movimento precisa somar `LIMIAR_RETOMADA` pixels para contar --
+        distancia de um gesto de quem quer o cursor de volta, nao de ruido.
+        """
+        if ev["t"] != "mv":
+            return True
+        x, y = ev["pos"]
+        anterior, self._pos_da_retomada = self._pos_da_retomada, (x, y)
+        if anterior is None:
+            return False  # primeira leitura: nao ha' de onde medir
+        self._andado_da_retomada += abs(x - anterior[0]) + abs(y - anterior[1])
+        return self._andado_da_retomada >= LIMIAR_RETOMADA
+
+    def _zerar_retomada(self) -> None:
+        """Recomeca a medir. Chamado quando o comando muda de mao."""
+        self._pos_da_retomada = None
+        self._andado_da_retomada = 0
 
     def _comando_volta_por_input(self) -> None:
         """Alguem mexeu no teclado/mouse deste PC enquanto outro comandava."""
