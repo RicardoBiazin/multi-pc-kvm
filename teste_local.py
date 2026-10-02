@@ -2086,6 +2086,104 @@ def teste_uma_janela_por_vez() -> None:
            "'{conf.APP} -- um teclado" in empacotador)
 
 
+def teste_arquivo_do_explorer_lido_pelo_usuario() -> None:
+    """Arquivo copiado no Explorer tem de atravessar mesmo com o agente SYSTEM.
+
+    Por semanas: texto passava, arquivo nao. O log do agente dizia
+    "o IDataObject respondeu, mas so' oferece: nada" e "(no clipboard:
+    DataObject)". O Explorer publica arquivo por OLE, com os formatos entregues
+    sob demanda pelo PROPRIO Explorer -- e o agente roda como SYSTEM, outra
+    conta, que dali nao consegue busca'-los. Reproduzido em 02/10/2026: com o
+    mesmo objeto de dados do Explorer, um processo de usuario ve' CF_HDROP.
+
+    A saida e' um PowerShell lancado como o usuario. Este teste roda o COMANDO
+    EXATO contra um objeto de dados do Shell publicado aqui -- este processo
+    faz o papel do Explorer, inclusive bombeando mensagens, sem o que o leitor
+    fica pendurado esperando o dono atender.
+    """
+    print("arquivo do Explorer lido por processo do usuario")
+    import os
+    import subprocess
+    import tempfile
+
+    import pythoncom
+    from win32com.shell import shell
+
+    import sessao_win as sw
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        alvo = pasta / "do-explorer.txt"
+        alvo.write_text("x", encoding="utf-8")
+
+        pythoncom.OleInitialize()
+        desktop = shell.SHGetDesktopFolder()
+        _, pidl_pasta, _ = desktop.ParseDisplayName(0, None, str(pasta))
+        pasta_shell = desktop.BindToObject(pidl_pasta, None, shell.IID_IShellFolder)
+        _, pidl_item, _ = pasta_shell.ParseDisplayName(0, None, alvo.name)
+        _, objeto = pasta_shell.GetUIObjectOf(0, [pidl_item],
+                                              pythoncom.IID_IDataObject, 0)
+        pythoncom.OleSetClipboard(objeto)
+
+        saida = str(pasta / "saida.txt")
+        leitor = subprocess.Popen(sw.comando_ler_arquivos(saida),
+                                  creationflags=0x08000000)  # CREATE_NO_WINDOW
+        limite = time.time() + 20
+        while leitor.poll() is None and time.time() < limite:
+            pythoncom.PumpWaitingMessages()  # o "Explorer" atendendo
+            time.sleep(0.02)
+        if leitor.poll() is None:
+            leitor.kill()
+        caminhos = sw.ler_saida_de_arquivos(saida) or []
+        pythoncom.OleSetClipboard(None)
+
+        checar("o PowerShell como usuario le' o arquivo copiado",
+               len(caminhos) == 1
+               and os.path.samefile(caminhos[0], alvo), str(caminhos))
+        checar("e o arquivo intermediario some depois de lido",
+               not os.path.exists(saida))
+
+        # Saida com BOM (o Set-Content -Encoding UTF8 do PowerShell 5 grava um).
+        com_bom = pasta / "bom.txt"
+        com_bom.write_bytes(b"\xef\xbb\xbfC:\\a.txt\r\nC:\\b.txt\r\n")
+        checar("le' a saida com BOM",
+               sw.ler_saida_de_arquivos(str(com_bom)) == ["C:\\a.txt", "C:\\b.txt"])
+        checar("sem saida, devolve None",
+               sw.ler_saida_de_arquivos(str(pasta / "nao-existe.txt")) is None)
+
+    # A fiacao: so' recorre ao usuario quando os tres sinais coincidem.
+    pedidos: list = []
+    salvos = (cw._CONTA_SYSTEM, cw.formatos_no_clipboard,
+              sw.arquivos_do_clipboard_pelo_usuario)
+    sinc = cw.Sincronizador(lambda _m: None, threading.Event())
+    salvo_ler = sinc._ler_com_paciencia
+    try:
+        sinc._ler_com_paciencia = lambda: None
+        sw.arquivos_do_clipboard_pelo_usuario = (
+            lambda: pedidos.append(1) or ["C:\\do\\usuario.txt"])
+        cw.formatos_no_clipboard = lambda: ["DataObject"]
+
+        cw._CONTA_SYSTEM = True
+        msg = sinc._ler_tudo()
+        checar("SYSTEM + DataObject: pede ao usuario e manda os arquivos",
+               msg == {"t": "clip", "fmt": "arquivos",
+                       "caminhos": ["C:\\do\\usuario.txt"]}, str(msg))
+
+        pedidos.clear()
+        cw._CONTA_SYSTEM = False
+        checar("fora do SYSTEM nao lanca PowerShell nenhum",
+               sinc._ler_tudo() is None and not pedidos)
+
+        cw._CONTA_SYSTEM = True
+        cw.formatos_no_clipboard = lambda: ["CF_UNICODETEXT"]
+        checar("sem o marcador do OLE tambem nao",
+               sinc._ler_tudo() is None and not pedidos)
+    finally:
+        (cw._CONTA_SYSTEM, cw.formatos_no_clipboard,
+         sw.arquivos_do_clipboard_pelo_usuario) = salvos
+        sinc._ler_com_paciencia = salvo_ler
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -2127,6 +2225,7 @@ def main() -> int:
     teste_queda_relatada_pela_causa()
     teste_retomada_exige_gesto()
     teste_uma_janela_por_vez()
+    teste_arquivo_do_explorer_lido_pelo_usuario()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

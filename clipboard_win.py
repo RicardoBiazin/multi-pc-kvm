@@ -24,6 +24,7 @@ import win32con
 from PIL import Image
 
 import arquivos
+import sessao_win
 
 # Carregado aqui, e nao dentro de `_ler_por_ole`: com `--onefile` um import
 # tardio le' do pacote extraido em %TEMP%, que pode ter sido apagado por baixo
@@ -35,6 +36,11 @@ except ImportError:  # pragma: sem COM, o plano B do OLE simplesmente nao existe
     pythoncom = None
 
 log = logging.getLogger("clipboard")
+
+# O agente do inicio automatico roda como SYSTEM, e dali nao enxerga
+# arquivo copiado no Explorer (ver sessao_win.arquivos_do_clipboard_
+# pelo_usuario). Calculado uma vez: a conta do processo nao muda.
+_CONTA_SYSTEM = sessao_win.sou_system()
 
 TETO_IMAGEM = 8 * 1024 * 1024  # PNG maior que isso e' descartado
 INTERVALO = 0.3  # segundos entre verificacoes
@@ -463,6 +469,26 @@ class Sincronizador(threading.Thread):
         finally:
             log.info("sincronizador do clipboard encerrado")
 
+    def _ler_tudo(self) -> dict | None:
+        """Le' o clipboard; se for o caso, pede ao usuario a lista de arquivos.
+
+        So' recorre ao processo do usuario quando os tres sinais coincidem:
+        nada legivel por aqui, o marcador "DataObject" no clipboard (a
+        assinatura de publicacao por OLE) e este processo sendo SYSTEM. Fora
+        disso, lancar um PowerShell a cada copia seria custo sem motivo.
+        """
+        msg = self._ler_com_paciencia()
+        if msg is not None or not _CONTA_SYSTEM:
+            return msg
+        if "DataObject" not in formatos_no_clipboard():
+            return None
+        caminhos = sessao_win.arquivos_do_clipboard_pelo_usuario()
+        if not caminhos:
+            return None
+        log.info("li %d arquivo(s) pelo usuario logado: daqui (SYSTEM) o "
+                 "clipboard do Explorer nao se deixa ler", len(caminhos))
+        return {"t": "clip", "fmt": "arquivos", "caminhos": caminhos}
+
     def _ler_com_paciencia(self) -> dict | None:
         """Le o clipboard dando tempo a quem esta' publicando.
 
@@ -490,7 +516,7 @@ class Sincronizador(threading.Thread):
                         continue
                 # A sequencia so' e' confirmada depois de uma leitura que deu
                 # certo -- senao uma falha transitoria perderia a mudanca.
-                msg = self._ler_com_paciencia()
+                msg = self._ler_tudo()
                 marca = impressao(msg) if msg is not None else None
                 with self._lock:
                     self._sequencia = sequencia

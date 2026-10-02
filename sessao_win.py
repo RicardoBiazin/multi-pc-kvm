@@ -28,7 +28,10 @@ com `SAIDA_TROCOU_DESKTOP` pedindo para nascer de novo no desktop novo.
 
 from __future__ import annotations
 
+import base64
 import logging
+import os
+import time
 
 import ntsecuritycon
 import win32api
@@ -130,6 +133,116 @@ def appdata_do_usuario_do_console() -> "pathlib.Path | None":
         return None
     finally:
         token.Close()
+
+
+def sou_system() -> bool:
+    """Este processo roda como SYSTEM (o agente do inicio automatico)?"""
+    try:
+        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(),
+                                                win32con.TOKEN_QUERY)
+        try:
+            sid, _ = win32security.GetTokenInformation(token,
+                                                       win32security.TokenUser)
+        finally:
+            token.Close()
+        return win32security.ConvertSidToStringSid(sid) == "S-1-5-18"
+    except Exception:
+        return False
+
+
+def comando_ler_arquivos(saida: str) -> str:
+    """Linha de comando do PowerShell que grava em `saida` os arquivos copiados.
+
+    PowerShell, e nao o nosso proprio .exe: ele nao pede elevacao (o nosso tem
+    manifest requireAdministrator, que um token comum de usuario nao lanca),
+    sobe em fracao de segundo em vez de extrair 40 MB de --onefile, e o
+    Get-Clipboard le' pelo mesmo OLE que o Explorer usa para publicar.
+
+    -EncodedCommand para nenhum caminho com espaco ou aspas precisar de
+    escape na linha de comando.
+    """
+    alvo = saida.replace("'", "''")
+    script = ("$f = Get-Clipboard -Format FileDropList "
+              "-ErrorAction SilentlyContinue; "
+              "if ($f) { $f.FullName | Set-Content -LiteralPath '" + alvo +
+              "' -Encoding UTF8 }")
+    codificado = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return ("powershell.exe -NoProfile -NonInteractive -Sta "
+            "-WindowStyle Hidden -EncodedCommand " + codificado)
+
+
+def ler_saida_de_arquivos(saida: str) -> "list[str] | None":
+    """Le' (e apaga) o que o PowerShell gravou. None se nada veio."""
+    try:
+        with open(saida, encoding="utf-8-sig") as f:
+            caminhos = [linha.strip() for linha in f if linha.strip()]
+    except OSError:
+        return None
+    try:
+        os.remove(saida)
+    except OSError:
+        pass
+    return caminhos or None
+
+
+def arquivos_do_clipboard_pelo_usuario(espera: float = 6.0) -> "list[str] | None":
+    """Arquivos copiados no Explorer, lidos por um processo DO USUARIO.
+
+    Por que existe: arquivo copiado no Explorer vai para o clipboard por OLE
+    (OleSetClipboard), com os formatos entregues sob demanda PELO PROCESSO DO
+    EXPLORER. O agente roda como SYSTEM -- outra conta -- e dali enxerga so' o
+    marcador "DataObject"; o IDataObject responde, mas sem formato nenhum. Foi
+    o que impediu, por semanas, copiar arquivo do PC da esquerda para o da
+    direita (log: "o IDataObject respondeu, mas so' oferece: nada"), enquanto
+    texto e imagem passavam. Reproduzido em 02/10/2026: com o MESMO objeto de
+    dados do Explorer no clipboard, um processo de usuario ve' CF_HDROP e a
+    lista de arquivos normalmente.
+
+    Entao quem le' e' um PowerShell lancado com o token do usuario logado, na
+    area de trabalho dele. Exige SE_TCB (WTSQueryUserToken): fora do agente
+    devolve None, e quem chama segue como antes.
+    """
+    sessao = sessao_do_console()
+    if sessao is None:
+        return None
+    try:
+        token = win32ts.WTSQueryUserToken(sessao)
+    except Exception:
+        return None  # sem SE_TCB: nao somos o agente, nao ha' o que fazer
+    try:
+        primario = win32security.DuplicateTokenEx(
+            token, win32security.SecurityImpersonation,
+            win32con.MAXIMUM_ALLOWED, ntsecuritycon.TokenPrimary)
+    finally:
+        token.Close()
+    try:
+        ambiente = win32profile.CreateEnvironmentBlock(primario, False)
+        temp = ambiente.get("TEMP") or ambiente.get("TMP")
+        if not temp:
+            return None
+        saida = os.path.join(
+            temp, f"multipc-kvm-clip-{os.getpid()}-{int(time.time() * 1000)}.txt")
+        inicio = win32process.STARTUPINFO()
+        inicio.lpDesktop = r"WinSta0\Default"
+        processo, thread, _pid, _tid = win32process.CreateProcessAsUser(
+            primario, None, comando_ler_arquivos(saida), None, None, False,
+            win32con.CREATE_NO_WINDOW | win32con.CREATE_UNICODE_ENVIRONMENT,
+            ambiente, None, inicio)
+        thread.Close()
+        try:
+            if esperar(processo, espera) is None:
+                encerrar(processo)
+                log.info("o leitor de arquivos do clipboard nao respondeu em %.0fs",
+                         espera)
+        finally:
+            processo.Close()
+        return ler_saida_de_arquivos(saida)
+    except Exception:
+        log.info("nao consegui ler os arquivos do clipboard pelo usuario",
+                 exc_info=True)
+        return None
+    finally:
+        primario.Close()
 
 
 def _token_do_system_para(sessao: int):

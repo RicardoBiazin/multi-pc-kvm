@@ -162,6 +162,13 @@ Cada troca de desktop custa uma partida nova do `.exe`, e um `--onefile`
 extrai o pacote inteiro a cada partida — depois de desbloquear a tela há um
 intervalo até o teclado voltar a atravessar. É o preço de manter um arquivo só.
 
+Arquivo **copiado no Explorer** é lido por um processo do usuário logado, e não
+pelo agente: o Explorer publica arquivo por OLE, com os formatos entregues sob
+demanda por ele mesmo, e o agente — que é SYSTEM, outra conta — dali só enxerga
+o marcador `DataObject`. Quando isso acontece o agente lança um PowerShell com o
+token do usuário (`Get-Clipboard -Format FileDropList`), que lê a lista em
+fração de segundo. Texto e imagem não passam por isso.
+
 Arquivos colados de um PC para o outro são gravados no `%APPDATA%` de **quem
 está logado**, e não no de quem está rodando: o agente é SYSTEM, e o `%APPDATA%`
 de SYSTEM é `C:\Windows\system32\config\systemprofile\...`, pasta que o
