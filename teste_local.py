@@ -2184,6 +2184,74 @@ def teste_arquivo_do_explorer_lido_pelo_usuario() -> None:
         sinc._ler_com_paciencia = salvo_ler
 
 
+def teste_sair_da_bandeja_para_de_verdade() -> None:
+    """O "Sair" do icone tem de parar o inicio automatico -- ou dizer por que.
+
+    04/10/2026: no PC da esquerda o Sair nao fechava nada. O log mostrava, duas
+    vezes, "Sair pedido pela bandeja" e a vida seguindo, SEM nenhuma linha de
+    erro. O parar_tarefa() pedia a tarefa por COM, o _tarefa() engolia o erro
+    devolvendo None, e o parar_tarefa() via None e voltava sem fazer nada. E o
+    plano B era um SystemExit -- que, levantado na thread do icone, encerra so'
+    aquela thread.
+    """
+    print("sair pela bandeja para de verdade")
+    import servico as svc
+
+    # Caminho REAL ate' o schtasks, com uma tarefa que nao existe: tem de
+    # levantar com a mensagem dele, e nao voltar calado.
+    nome = svc.NOME
+    try:
+        svc.NOME = "MultiPCKVM-nao-existe-teste"
+        try:
+            svc.parar_tarefa()
+            checar("parar tarefa inexistente LEVANTA em vez de calar", False)
+        except RuntimeError as exc:
+            checar("parar tarefa inexistente LEVANTA em vez de calar", True)
+            checar("e a mensagem do schtasks vem legivel (sem acento quebrado)",
+                   chr(0xFFFD) not in str(exc), str(exc)[:70])
+    finally:
+        svc.NOME = nome
+
+    chamadas: list = []
+    salvo = svc._rodar
+    try:
+        # schtasks funciona: nao pode partir para o taskkill.
+        svc._rodar = lambda *c: chamadas.append(c[0]) or (0, "SUCESSO")
+        svc._encerrar_tudo()
+        checar("com o schtasks ok, nao derruba processo nenhum",
+               chamadas == ["schtasks.exe"], str(chamadas))
+
+        # schtasks falha: plano B derruba o supervisor (sessao 0).
+        chamadas.clear()
+        svc._rodar = lambda *c: chamadas.append(c) or (
+            (1, "Acesso negado") if c[0] == "schtasks.exe" else (0, "ok"))
+        svc._encerrar_tudo()
+        checar("schtasks falhando, o plano B derruba o supervisor",
+               len(chamadas) == 2 and chamadas[1][0] == "taskkill.exe"
+               and "SESSION eq 0" in chamadas[1], str(chamadas))
+
+        # Os dois falham: nao pode estourar (e' a thread do icone).
+        svc._rodar = lambda *c: (1, "falhou")
+        try:
+            svc._encerrar_tudo()
+            checar("tudo falhando, registra e nao estoura", True)
+        except BaseException as exc:  # inclui SystemExit
+            checar("tudo falhando, registra e nao estoura", False, repr(exc))
+    finally:
+        svc._rodar = salvo
+
+    # A dica do icone cabe no campo de 128 do Windows.
+    import bandeja
+
+    class MotorFalante:
+        def resumo(self):
+            return "cliente 'PC-esq' | conectado: DESKTOP-FS65BNN | " + "x" * 200
+
+    dica = bandeja.dica_do_icone(MotorFalante())
+    checar("a dica do icone cabe no limite do Windows",
+           len(dica) <= 127, f"{len(dica)} caracteres")
+
+
 def main() -> int:
     ew.ativar_dpi()
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -2226,6 +2294,7 @@ def main() -> int:
     teste_retomada_exige_gesto()
     teste_uma_janela_por_vez()
     teste_arquivo_do_explorer_lido_pelo_usuario()
+    teste_sair_da_bandeja_para_de_verdade()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")

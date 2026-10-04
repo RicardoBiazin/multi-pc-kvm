@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import subprocess
 import sys
 import threading
 import time
@@ -209,7 +210,8 @@ def _tarefa():
     """A tarefa registrada, ou None."""
     try:
         return _agendador().GetTask(NOME)
-    except Exception:
+    except Exception as exc:
+        log.debug("o Agendador nao entregou a tarefa %s: %s", NOME, exc)
         return None
 
 
@@ -337,12 +339,33 @@ def rodar_como_servico() -> int:
 # -- o agente (sessao do console, num desktop) -------------------------------
 
 
+_SEM_JANELA = 0x08000000  # CREATE_NO_WINDOW
+
+
+def _rodar(*comando: str) -> tuple[int, str]:
+    """Roda um utilitario do Windows sem janela. Devolve (codigo, saida)."""
+    r = subprocess.run(list(comando), capture_output=True,
+                       creationflags=_SEM_JANELA)
+    # Os utilitarios de console escrevem na pagina OEM (cp850 aqui), nao na
+    # ANSI: decodificado como ANSI, "nao" vira "n�o" no log.
+    saida = (r.stdout + r.stderr).decode("oem", "replace").strip()
+    return r.returncode, saida
+
+
 def parar_tarefa() -> None:
-    """Para a tarefa AGORA, sem desregistrar: ela volta no proximo boot."""
-    tarefa = _tarefa()
-    if tarefa is None:
-        return
-    tarefa.Stop(0)
+    """Para a tarefa AGORA, sem desregistrar: ela volta no proximo boot/logon.
+
+    Pelo `schtasks /end`, e nao pelo COM do Agendador. A versao anterior pedia
+    a tarefa por COM, e `_tarefa()` engole qualquer erro devolvendo None --
+    entao, chamada da thread do icone da bandeja, ela via None e voltava sem
+    fazer NADA e sem dizer nada. O log do PC da esquerda mostra o resultado
+    duas vezes: "Sair pedido pela bandeja" e a vida seguindo, sem uma linha de
+    erro. Um utilitario de linha de comando nao depende do estado de COM da
+    thread que o chama. Levanta RuntimeError com a saida dele se falhar.
+    """
+    codigo, saida = _rodar("schtasks.exe", "/end", "/tn", NOME)
+    if codigo != 0:
+        raise RuntimeError(f"schtasks /end devolveu {codigo}: {saida}")
 
 
 def _encerrar_tudo() -> None:
@@ -360,10 +383,23 @@ def _encerrar_tudo() -> None:
     log.info("Sair pedido pela bandeja: parando a tarefa de inicio automatico")
     try:
         parar_tarefa()
-    except Exception:
-        log.warning("nao consegui parar a tarefa; encerrando so' o agente",
-                    exc_info=True)
-        raise SystemExit(0)
+        log.info("tarefa parada; o supervisor e este agente vao terminar agora")
+        return
+    except Exception as exc:
+        log.warning("nao consegui parar a tarefa (%s); derrubando o supervisor "
+                    "direto", exc)
+    # Plano B: o supervisor e' o unico MultiPC-KVM na sessao 0. Derrubado ele,
+    # o job object leva este agente junto. Antes havia aqui um SystemExit --
+    # que, levantado na thread do icone, encerrava so' aquela thread e o
+    # programa continuava no ar.
+    codigo, saida = _rodar("taskkill.exe", "/f", "/fi", "SESSION eq 0",
+                           "/im", "MultiPC-KVM.exe")
+    if codigo == 0:
+        log.info("supervisor derrubado: %s", saida)
+    else:
+        log.error("o Sair nao conseguiu encerrar o inicio automatico "
+                  "(taskkill devolveu %d: %s). Pare como Administrador: "
+                  "schtasks /end /tn %s", codigo, saida, NOME)
 
 
 _janela_aberta = None  # processo da janela que a bandeja abriu, se viva

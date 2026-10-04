@@ -25,6 +25,22 @@ def _imagem(cor) -> "object":
     return img
 
 
+# O Windows guarda a dica do icone num campo de 128 caracteres (szTip, com o
+# terminador). Passar disso faz o pystray levantar ValueError ao redesenhar o
+# icone -- visto no log do PC da esquerda: "string too long (130, maximum
+# length 128)", quando o Explorer reiniciou. O icone some da bandeja.
+LIMITE_DA_DICA = 127
+
+
+def dica_do_icone(motor) -> str:
+    """Dica do icone: versao e estado, cortada no limite do Windows."""
+    import configuracao as conf
+    texto = f"{conf.APP} v{conf.VERSAO} -- {motor.resumo()}"
+    if len(texto) > LIMITE_DA_DICA:
+        texto = texto[:LIMITE_DA_DICA - 3] + "..."
+    return texto
+
+
 def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
           rotulo_abrir: str = "Abrir", rotulo_sair: str = "Sair"):
     """Devolve o icone (ja' rodando) ou None se o pystray nao estiver presente.
@@ -68,7 +84,7 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
             if ativo != anterior:
                 anterior = ativo
                 icone.icon = _imagem(VERDE if ativo else CINZA)
-            icone.title = f"{conf.APP} v{conf.VERSAO} -- {motor.resumo()}"
+            icone.title = dica_do_icone(motor)
 
     threading.Thread(target=icone.run, name="bandeja", daemon=True).start()
     threading.Thread(target=atualizar, name="bandeja-estado", daemon=True).start()
