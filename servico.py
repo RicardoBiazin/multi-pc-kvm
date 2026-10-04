@@ -39,7 +39,9 @@ configuracao, que ja' roda elevada.
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import os
 import pathlib
 import subprocess
 import sys
@@ -47,6 +49,9 @@ import threading
 import time
 from xml.sax.saxutils import escape as escapar_xml
 
+import win32api
+import win32con
+import win32event
 import win32job
 
 import configuracao as conf
@@ -328,11 +333,86 @@ def supervisionar(parar: threading.Event) -> None:
             parar.wait(PAUSA_APOS_FALHA)
 
 
+def _imagem_do_processo(handle) -> str:
+    """Caminho do executavel de um processo, so' com acesso LIMITADO."""
+    buf = ctypes.create_unicode_buffer(1024)
+    tamanho = ctypes.c_ulong(len(buf))
+    if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+            int(handle), 0, buf, ctypes.byref(tamanho)):
+        return buf.value
+    return ""
+
+
+def processo_pai_do_onefile():
+    """Handle do processo pai, SE ele for o bootloader deste mesmo .exe.
+
+    Com `--onefile` o programa sao dois processos: o pai desembrulha e espera;
+    o filho e' quem roda o Python. O Agendador so' conhece o PAI. Confere-se a
+    imagem para nao ficar vigiando um processo alheio que tenha herdado o PID
+    de um pai que ja' morreu. None fora do .exe, ou se o pai nao for o nosso.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    acesso = win32con.SYNCHRONIZE | 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
+    try:
+        handle = win32api.OpenProcess(acesso, False, os.getppid())
+    except Exception:
+        return None
+    if not _mesmo_executavel(_imagem_do_processo(handle), sys.executable):
+        handle.Close()
+        return None
+    return handle
+
+
+def _mesmo_executavel(a: str, b: str) -> bool:
+    """Compara pelo ARQUIVO, nao pelo texto do caminho.
+
+    Texto engana: nome curto 8.3 (GRRR03~1), atalho de execucao da Loja, caixa
+    diferente. O teste deste modulo caiu exatamente nisso -- no Python da Loja,
+    `sys.executable` e' um atalho e o Windows devolve o caminho real.
+    """
+    if not a or not b:
+        return False
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(a) == os.path.normcase(b)
+
+
+def vigiar_o_pai(parar: threading.Event, pai) -> None:
+    """Quando o processo pai morrer, o supervisor encerra junto.
+
+    Sem isto, `schtasks /end` -- e o "Finalizar" do Agendador, e o "Sair" do
+    icone -- respondiam "ÊXITO" e nao paravam NADA. Visto em 04/10/2026 no PC
+    da esquerda: a lista de processos depois do /end era identica a' de antes.
+    O Agendador matava o pai do --onefile, que e' o unico que ele conhece; o
+    supervisor de verdade, o filho, seguia no ar segurando os agentes.
+
+    `parar` faz o laco do supervisor encerrar o agente e voltar; o processo
+    sai, o job object fecha, e o que sobrou cai junto.
+    """
+    if pai is None:
+        return
+
+    def esperar() -> None:
+        win32event.WaitForSingleObject(pai, win32event.INFINITE)
+        log.info("o processo pai (o que o Agendador conhece) terminou; o "
+                 "supervisor encerra junto")
+        parar.set()
+
+    threading.Thread(target=esperar, name="vigia-do-pai", daemon=True).start()
+
+
 def rodar_como_servico() -> int:
     """O processo que a tarefa agendada roda no boot. So' sai se o matarem."""
     log.info("supervisor no ar (sessao do console: %s)",
              sessao_win.sessao_do_console() or "nenhuma ainda")
-    supervisionar(threading.Event())
+    parar = threading.Event()
+    pai = processo_pai_do_onefile()
+    if pai is None:
+        log.info("sem processo pai do --onefile para vigiar")
+    vigiar_o_pai(parar, pai)
+    supervisionar(parar)
     return 0
 
 
@@ -381,25 +461,27 @@ def _encerrar_tudo() -> None:
     menu promete. Para desligar de vez, a janela tem "Iniciar com o Windows".
     """
     log.info("Sair pedido pela bandeja: parando a tarefa de inicio automatico")
+    # Primeiro o /end: com ele o Agendador da' a tarefa por encerrada A PEDIDO
+    # e nao a "ressuscita" pelo RestartOnFailure um minuto depois.
     try:
         parar_tarefa()
-        log.info("tarefa parada; o supervisor e este agente vao terminar agora")
-        return
     except Exception as exc:
-        log.warning("nao consegui parar a tarefa (%s); derrubando o supervisor "
-                    "direto", exc)
-    # Plano B: o supervisor e' o unico MultiPC-KVM na sessao 0. Derrubado ele,
-    # o job object leva este agente junto. Antes havia aqui um SystemExit --
-    # que, levantado na thread do icone, encerrava so' aquela thread e o
-    # programa continuava no ar.
+        log.warning("schtasks /end falhou (%s); seguindo para derrubar o "
+                    "supervisor direto", exc)
+    # E depois o supervisor, SEMPRE -- nao so' quando o /end falha. O /end
+    # responde "ÊXITO" e mata so' o pai do --onefile; o supervisor de verdade
+    # e' o filho. Era o que fazia esta mesma funcao, na v2.3.4, parecer certa
+    # e nao fechar nada. Derrubado o supervisor (unico MultiPC-KVM na sessao
+    # 0), o job object leva este agente junto.
     codigo, saida = _rodar("taskkill.exe", "/f", "/fi", "SESSION eq 0",
                            "/im", "MultiPC-KVM.exe")
-    if codigo == 0:
-        log.info("supervisor derrubado: %s", saida)
-    else:
-        log.error("o Sair nao conseguiu encerrar o inicio automatico "
-                  "(taskkill devolveu %d: %s). Pare como Administrador: "
-                  "schtasks /end /tn %s", codigo, saida, NOME)
+    log.info("taskkill do supervisor devolveu %d: %s", codigo, saida)
+    _, resta = _rodar("tasklist.exe", "/fi", "SESSION eq 0",
+                      "/fi", "IMAGENAME eq MultiPC-KVM.exe")
+    if "MultiPC-KVM.exe" in resta:
+        log.error("o Sair nao conseguiu encerrar o supervisor. Pare como "
+                  "Administrador: schtasks /end /tn %s e depois "
+                  "taskkill /f /im MultiPC-KVM.exe", NOME)
 
 
 _janela_aberta = None  # processo da janela que a bandeja abriu, se viva

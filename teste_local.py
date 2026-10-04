@@ -2215,20 +2215,24 @@ def teste_sair_da_bandeja_para_de_verdade() -> None:
     chamadas: list = []
     salvo = svc._rodar
     try:
-        # schtasks funciona: nao pode partir para o taskkill.
-        svc._rodar = lambda *c: chamadas.append(c[0]) or (0, "SUCESSO")
+        # schtasks "funciona" -- e mesmo assim o supervisor TEM de ser
+        # derrubado. Em 04/10/2026 o /end respondeu "ÊXITO" e os tres
+        # processos continuaram no ar: ele so' mata o pai do --onefile. A
+        # versao anterior deste teste exigia o contrario, ou seja, cobria
+        # justamente o comportamento que deixava o Sair sem efeito.
+        svc._rodar = lambda *c: chamadas.append(c[0]) or (0, "ÊXITO")
         svc._encerrar_tudo()
-        checar("com o schtasks ok, nao derruba processo nenhum",
-               chamadas == ["schtasks.exe"], str(chamadas))
+        checar("mesmo com o schtasks ok, derruba o supervisor",
+               chamadas[:2] == ["schtasks.exe", "taskkill.exe"], str(chamadas))
 
         # schtasks falha: plano B derruba o supervisor (sessao 0).
         chamadas.clear()
         svc._rodar = lambda *c: chamadas.append(c) or (
             (1, "Acesso negado") if c[0] == "schtasks.exe" else (0, "ok"))
         svc._encerrar_tudo()
-        checar("schtasks falhando, o plano B derruba o supervisor",
-               len(chamadas) == 2 and chamadas[1][0] == "taskkill.exe"
-               and "SESSION eq 0" in chamadas[1], str(chamadas))
+        checar("schtasks falhando, ainda derruba o supervisor (sessao 0)",
+               any(c[0] == "taskkill.exe" and "SESSION eq 0" in c
+                   for c in chamadas), str(chamadas))
 
         # Os dois falham: nao pode estourar (e' a thread do icone).
         svc._rodar = lambda *c: (1, "falhou")
@@ -2250,6 +2254,55 @@ def teste_sair_da_bandeja_para_de_verdade() -> None:
     dica = bandeja.dica_do_icone(MotorFalante())
     checar("a dica do icone cabe no limite do Windows",
            len(dica) <= 127, f"{len(dica)} caracteres")
+
+
+def teste_supervisor_morre_com_o_pai() -> None:
+    """Parar a tarefa tem de parar o programa.
+
+    O Agendador so' conhece o processo que ELE iniciou -- e com --onefile esse
+    e' o pai que desembrulha, nao o supervisor. `schtasks /end` matava o pai e
+    o supervisor, filho, seguia no ar segurando os agentes.
+    """
+    print("supervisor morre junto com o pai do --onefile")
+    import os
+    import subprocess
+
+    import win32api
+    import win32con
+
+    import servico as svc
+
+    checar("fora do .exe nao ha' pai do --onefile para vigiar",
+           svc.processo_pai_do_onefile() is None)
+
+    # A imagem do processo e' o que impede vigiar um processo alheio que
+    # herdou o PID de um pai ja' morto.
+    # Comparado com o caminho REAL deste processo, e nao com sys.executable:
+    # no Python da Loja, sys.executable e' um atalho.
+    proprio = win32api.OpenProcess(0x1000, False, os.getpid())
+    imagem = svc._imagem_do_processo(proprio)
+    proprio.Close()
+    checar("le' o executavel de um processo pelo handle",
+           svc._mesmo_executavel(imagem, win32api.GetModuleFileName(None)),
+           imagem[-40:])
+    checar("e nao confunde com outro executavel",
+           not svc._mesmo_executavel(imagem, os.path.join(
+               os.environ["WINDIR"], "System32", "notepad.exe")))
+
+    # Um processo de verdade faz o papel do pai: quando ele morre, o
+    # supervisor recebe o sinal para encerrar.
+    pai = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"])
+    handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, pai.pid)
+    parar = threading.Event()
+    svc.vigiar_o_pai(parar, handle)
+    checar("com o pai vivo, o supervisor segue", not parar.is_set())
+    checar("o pai morreu: o supervisor e' mandado parar", parar.wait(10))
+    pai.wait()
+
+    # Sem pai identificado, nao arma vigia nenhum (e nao estoura).
+    nada = threading.Event()
+    svc.vigiar_o_pai(nada, None)
+    checar("sem pai, nenhum vigia", not nada.wait(0.3))
 
 
 def main() -> int:
@@ -2295,6 +2348,7 @@ def main() -> int:
     teste_uma_janela_por_vez()
     teste_arquivo_do_explorer_lido_pelo_usuario()
     teste_sair_da_bandeja_para_de_verdade()
+    teste_supervisor_morre_com_o_pai()
     print()
     if falhas:
         print(f"{len(falhas)} FALHA(S): {', '.join(falhas)}")
