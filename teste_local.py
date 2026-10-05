@@ -197,6 +197,41 @@ def teste_shift_direito() -> None:
            not flags(0xA0, 0x2A, False) & ew.KEYEVENTF_EXTENDEDKEY)
 
 
+def teste_teclado_numerico() -> None:
+    """Regressao: o teclado numerico soltava setas no PC comandado.
+
+    Por scancode, o "1" do numpad (0x4F) e' o mesmo do "End": quem decide e' o
+    Num Lock do PC que recebe, e o do PC comandado costumava estar desligado.
+    """
+    print("teclado numerico vai por virtual-key")
+    injetor = ew.Injetor()
+    enviados: list = []
+    injetor._enviar = lambda *entradas: enviados.extend(entradas)
+
+    def ki(vk: int, scan: int, ext: bool = False, pressionar: bool = True):
+        enviados.clear()
+        injetor.tecla(vk, scan, ext, pressionar)
+        return enviados[0].ki
+
+    um = ki(0x61, 0x4F)  # VK_NUMPAD1
+    checar("numpad 1 vai pelo VK, sem KEYEVENTF_SCANCODE",
+           um.wVk == 0x61 and not um.dwFlags & ew.KEYEVENTF_SCANCODE)
+    checar("numpad 1 leva o scancode junto (para quem le o lParam)",
+           um.wScan == 0x4F)
+    solto = ki(0x61, 0x4F, pressionar=False)
+    checar("keyup do numpad 1 tambem pelo VK",
+           solto.wVk == 0x61 and bool(solto.dwFlags & ew.KEYEVENTF_KEYUP))
+    checar("numpad 0 e virgula do numpad pelo VK",
+           ki(0x60, 0x52).wVk == 0x60 and ki(0x6E, 0x53).wVk == 0x6E)
+    # Contraste: Num Lock desligado no PC do teclado -> o hook ja' diz End, e
+    # End deve continuar End (por scancode, como sempre).
+    fim = ki(0x23, 0x4F)
+    checar("End do bloco numerico segue por scancode",
+           fim.wVk == 0 and bool(fim.dwFlags & ew.KEYEVENTF_SCANCODE))
+    checar("letra segue por scancode",
+           bool(ki(0x41, 0x1E).dwFlags & ew.KEYEVENTF_SCANCODE))
+
+
 def teste_espera_do_sair() -> None:
     """Regressao: o cliente podia ficar esperando para sempre a resposta do 'sair'.
 
@@ -2216,11 +2251,11 @@ def teste_sair_da_bandeja_para_de_verdade() -> None:
     salvo = svc._rodar
     try:
         # schtasks "funciona" -- e mesmo assim o supervisor TEM de ser
-        # derrubado. Em 04/10/2026 o /end respondeu "ÊXITO" e os tres
+        # derrubado. Em 04/10/2026 o /end respondeu "ÃŠXITO" e os tres
         # processos continuaram no ar: ele so' mata o pai do --onefile. A
         # versao anterior deste teste exigia o contrario, ou seja, cobria
         # justamente o comportamento que deixava o Sair sem efeito.
-        svc._rodar = lambda *c: chamadas.append(c[0]) or (0, "ÊXITO")
+        svc._rodar = lambda *c: chamadas.append(c[0]) or (0, "ÃŠXITO")
         svc._encerrar_tudo()
         checar("mesmo com o schtasks ok, derruba o supervisor",
                chamadas[:2] == ["schtasks.exe", "taskkill.exe"], str(chamadas))
@@ -2313,6 +2348,7 @@ def main() -> int:
     teste_layout()
     teste_injecao()
     teste_shift_direito()
+    teste_teclado_numerico()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
     teste_transferencia_de_arquivos()

@@ -142,6 +142,17 @@ BOTOES = {
 # nao entram aqui: `E0 1D` e `E0 38` sao mesmo as teclas da direita.
 SCAN_SHIFT_DIREITO = 0x36
 
+# Os algarismos e a virgula do teclado numerico vao por VIRTUAL-KEY, nao por
+# scancode. O scancode deles e' o mesmo das setas/Home/End/PgUp... do bloco
+# numerico (0x4F e' tanto "1" quanto "End"); quem decide qual dos dois sai e' o
+# Num Lock DO PC QUE RECEBE. O LED que o usuario ve e' o do teclado fisico, e o
+# Num Lock do PC comandado costuma estar desligado (ele nunca recebe o toque da
+# tecla). Resultado: "o teclado numerico nao funciona no PC da esquerda" --
+# saiam setas no lugar dos numeros. O hook ja' entrega VK_NUMPAD0..9/VK_DECIMAL
+# quando o Num Lock do PC do teclado esta ligado; mandando o VK, sai o algarismo
+# la' do outro lado qualquer que seja o Num Lock dele.
+VKS_DO_NUMPAD = frozenset(range(0x60, 0x6A)) | {0x6E}  # NUMPAD0..9, DECIMAL
+
 # Modificadores a soltar ao trocar de maquina, senao ficam presos: (vk, scancode,
 # estendida). Os VKs sao os laterais (0xA0..0xA5) porque VK_SHIFT generico nao
 # distingue esquerda de direita, e a direita ficaria presa.
@@ -482,7 +493,8 @@ class Injetor:
 
     def tecla(self, vk: int, scan: int, estendida: bool, pressionar: bool) -> None:
         entrada = INPUT(type=INPUT_KEYBOARD)
-        if scan:
+        por_vk = vk in VKS_DO_NUMPAD  # ver a nota de VKS_DO_NUMPAD
+        if scan and not por_vk:
             flags = KEYEVENTF_SCANCODE
             # `and scan != SCAN_SHIFT_DIREITO`: ver a nota do scancode 0x36.
             # A correcao fica aqui, e nao na captura, porque protege tambem os
@@ -493,7 +505,8 @@ class Injetor:
             flags = 0
         if not pressionar:
             flags |= KEYEVENTF_KEYUP
-        entrada.ki = KEYBDINPUT(vk if not scan else 0, scan, flags, 0, MARCA)
+        usa_vk = por_vk or not scan
+        entrada.ki = KEYBDINPUT(vk if usa_vk else 0, scan, flags, 0, MARCA)
         self._enviar(entrada)
 
     def soltar_modificadores(self) -> None:
