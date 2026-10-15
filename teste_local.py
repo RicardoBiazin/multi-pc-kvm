@@ -197,6 +197,63 @@ def teste_shift_direito() -> None:
            not flags(0xA0, 0x2A, False) & ew.KEYEVENTF_EXTENDEDKEY)
 
 
+def teste_rede_mudou_de_ip() -> None:
+    """Regressao: trocar de roteador (IP novo) deixava os dois lados surdos.
+
+    O servidor seguia em LISTEN no IP que tinha sumido, e o cliente insistia no
+    IP velho do layout mesmo com o servidor se anunciando no novo.
+    """
+    import descoberta
+    import redes
+    import servidor
+    print("rede mudou de IP (roteador novo)")
+
+    meu = next((p.ip for p in redes.listar()), "")
+    sumiu = servidor.Servidor._escuta_sumiu
+    checar("IP que nao existe mais e' percebido", sumiu("192.0.2.77"))
+    checar("0.0.0.0 nunca 'some'", not sumiu("0.0.0.0"))
+    if meu:
+        checar("IP de uma placa desta maquina segue valido", not sumiu(meu))
+
+    chave = descoberta.impressao_da_chave("k")
+    anuncio = {"nome": "SRV", "papel": "servidor", "chave": chave,
+               "ip": "10.9.9.9"}
+    antes = descoberta._ativo
+    descoberta._ativo = type("F", (), {"lista": lambda s: [anuncio]})()
+    try:
+        checar("acha o servidor pelo anuncio",
+               descoberta.ip_do_servidor("SRV", chave) == "10.9.9.9")
+        checar("anuncio com outra chave nao vale",
+               descoberta.ip_do_servidor("SRV", "outra") == "")
+        checar("anuncio de outro nome nao vale",
+               descoberta.ip_do_servidor("X", chave) == "")
+
+        tentativas: list = []
+
+        def conectar(ip, porta, segredo, info):
+            tentativas.append(ip)
+            if ip != "10.9.9.9":
+                raise TimeoutError("timed out")
+            return object(), {}
+
+        original = cliente.protocolo.conectar
+        cliente.protocolo.conectar = conectar
+        cli = cliente_falso([], [])
+        cli.cfg = {"porta": 24810, "chave": "k"}
+        cli.parar = threading.Event()
+        cli.ultimo_erro = ""
+        cli._avisar_uma_vez = lambda *a: None
+        cli._atender = lambda conn: (cli.parar.set(), 0.0)[1]
+        try:
+            cli._laco()
+        finally:
+            cliente.protocolo.conectar = original
+        checar("cliente tenta o IP do layout e depois o anunciado",
+               tentativas == ["1", "10.9.9.9"], str(tentativas))
+    finally:
+        descoberta._ativo = antes
+
+
 def teste_teclado_numerico() -> None:
     """Regressao: o teclado numerico soltava setas no PC comandado.
 
@@ -2349,6 +2406,7 @@ def main() -> int:
     teste_injecao()
     teste_shift_direito()
     teste_teclado_numerico()
+    teste_rede_mudou_de_ip()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
     teste_transferencia_de_arquivos()

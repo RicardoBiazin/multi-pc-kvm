@@ -27,6 +27,7 @@ INTERVALO_PING = 2.5
 # watchdog nao derrubar um cliente saudavel numa oscilacao curta da rede.
 TIMEOUT_SEM_RESPOSTA = 8.0
 INTERVALO_WATCHDOG = 1.0  # de quanto em quanto o watchdog confere os clientes
+CONFERIR_ESCUTA = 5.0  # s entre conferencias de que o IP da porta ainda existe
 
 
 class Servidor:
@@ -126,6 +127,38 @@ class Servidor:
             return "0.0.0.0"
         return ip
 
+    def _abrir_ouvinte(self) -> tuple[str, socket.socket]:
+        endereco = self._endereco_de_escuta()
+        ouvinte = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ouvinte.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        ouvinte.bind((endereco, self.cfg["porta"]))
+        ouvinte.listen(8)
+        ouvinte.settimeout(0.5)
+        log.info("servidor '%s' ouvindo em %s:%d | panico: Ctrl+Alt+Shift+Esc",
+                 self.eu, endereco, self.cfg["porta"])
+        return endereco, ouvinte
+
+    @staticmethod
+    def _escuta_sumiu(endereco: str) -> bool:
+        """O IP em que a porta foi aberta deixou de existir nesta maquina?
+
+        Um socket preso a um IP que sumiu continua em LISTEN para sempre, sem
+        erro nenhum -- e nenhum cliente o alcanca mais. Visto em 15/10/2026: a
+        rede trocou de 192.168.10.x para 192.168.27.x (roteador novo) com o
+        programa aberto, e o servidor seguiu "ouvindo em 192.168.10.2".
+        """
+        if endereco == "0.0.0.0":
+            return False
+        try:
+            import redes
+            if redes.placa_de(endereco) is not None:
+                return False
+        except Exception:
+            return False
+        log.warning("o IP %s em que a porta estava aberta nao existe mais "
+                    "nesta maquina (a rede mudou?) - reabrindo a porta", endereco)
+        return True
+
     def executar(self) -> None:
         if self.cfg.get("capturar", True):
             self.captura.start()
@@ -134,14 +167,8 @@ class Servidor:
             log.warning("--sem-captura: so' a area de transferencia sera' "
                         "sincronizada")
 
-        endereco_escuta = self._endereco_de_escuta()
-        ouvinte = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ouvinte.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        ouvinte.bind((endereco_escuta, self.cfg["porta"]))
-        ouvinte.listen(8)
-        ouvinte.settimeout(0.5)
-        log.info("servidor '%s' ouvindo em %s:%d | panico: Ctrl+Alt+Shift+Esc",
-                 self.eu, endereco_escuta, self.cfg["porta"])
+        endereco_escuta, ouvinte = self._abrir_ouvinte()
+        conferir_em = time.monotonic() + CONFERIR_ESCUTA
 
         threading.Thread(target=self._enviar, name="rede-tx", daemon=True).start()
         threading.Thread(target=self._pingar, name="ping", daemon=True).start()
@@ -152,6 +179,11 @@ class Servidor:
 
         try:
             while not self.parar.is_set():
+                if time.monotonic() >= conferir_em:
+                    conferir_em = time.monotonic() + CONFERIR_ESCUTA
+                    if self._escuta_sumiu(endereco_escuta):
+                        ouvinte.close()
+                        endereco_escuta, ouvinte = self._abrir_ouvinte()
                 try:
                     sock, endereco = ouvinte.accept()
                 except socket.timeout:

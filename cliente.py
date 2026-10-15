@@ -26,6 +26,7 @@ import time
 import alvo as alv
 import clipboard_win
 import configuracao as conf
+import descoberta
 import entrada_win as ew
 import layout as lay
 import protocolo
@@ -136,13 +137,29 @@ class Cliente:
                 log.error("nenhum PC marcado como servidor no layout")
                 return
             destino = (servidor.ip, self.cfg["porta"])
+            apresentacao = {"papel": "cliente", "nome": self.eu,
+                            "tela": [self.largura, self.altura],
+                            "monitores": self.monitores}
             try:
-                conn, _ = protocolo.conectar(
-                    *destino, self.cfg["chave"],
-                    {"papel": "cliente", "nome": self.eu,
-                     "tela": [self.largura, self.altura],
-                     "monitores": self.monitores},
-                )
+                try:
+                    conn, _ = protocolo.conectar(
+                        *destino, self.cfg["chave"], apresentacao)
+                except OSError:
+                    # O IP do layout nao respondeu. Se o servidor esta' se
+                    # anunciando na rede com OUTRO IP (DHCP, roteador novo),
+                    # vai nele -- antes, era preciso corrigir o IP a' mao nos
+                    # dois PCs. Visto em 15/10/2026, na troca para 192.168.27.x.
+                    novo = descoberta.ip_do_servidor(
+                        servidor.nome, descoberta.impressao_da_chave(
+                            self.cfg.get("chave", "")))
+                    if not novo or novo == servidor.ip:
+                        raise
+                    log.info("'%s' nao respondeu em %s, mas esta' se anunciando "
+                             "em %s -- tentando por la'", servidor.nome,
+                             servidor.ip, novo)
+                    destino = (novo, self.cfg["porta"])
+                    conn, _ = protocolo.conectar(
+                        *destino, self.cfg["chave"], apresentacao)
             except Exception as exc:
                 self.ultimo_erro = str(exc)
                 self._avisar_uma_vez(

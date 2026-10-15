@@ -43,6 +43,25 @@ def impressao_da_chave(chave: str) -> str:
 
 INTERVALO_PLACAS = 20.0  # s entre releituras da lista de placas
 
+_ativo: "Farol | None" = None  # o farol no ar neste processo, se houver
+
+
+def ip_do_servidor(nome: str, chave: str) -> str:
+    """IP pelo qual o servidor `nome` esta' se anunciando agora, ou "".
+
+    So' vale um anuncio de SERVIDOR com o mesmo nome e a mesma impressao da
+    chave: o pacote UDP nao e' autenticado, entao o pior que um anuncio falso
+    consegue e' uma tentativa de conexao que o handshake HMAC recusa.
+    """
+    farol = _ativo
+    if farol is None or not nome:
+        return ""
+    for d in farol.lista():
+        if (d["nome"] == nome and d["papel"] == "servidor"
+                and d["chave"] == chave):
+            return d["ip"]
+    return ""
+
 
 class Farol(threading.Thread):
     """Anuncia este PC e mantem a lista dos que responderam."""
@@ -66,6 +85,8 @@ class Farol(threading.Thread):
         return sorted(vivos, key=lambda d: d["nome"].lower())
 
     def run(self) -> None:
+        global _ativo
+        _ativo = self
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
