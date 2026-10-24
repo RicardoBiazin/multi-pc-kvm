@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import pathlib
 import sys
 import threading
 
@@ -75,6 +76,40 @@ def conferir_o_proprio_pacote() -> str:
             f"passou por cima. FECHE E ABRA o programa: ele se extrai de novo")
 
 
+MODULOS_DO_PROGRAMA = (
+    "alvo", "arquivos", "aviso", "bandeja", "borda", "cliente",
+    "clipboard_win", "configuracao", "contador", "descoberta", "diagnostico",
+    "entrada_win", "interface", "layout", "motor", "protocolo", "redes",
+    "relatorio", "servico", "servidor", "sessao_win", "tema",
+)
+
+
+def conferir_pacote() -> int:
+    """Importa todos os modulos e usa a cifra, sem abrir janela nem rede.
+
+    Prova de que o .exe tem tudo o que precisa. Devolve 0, ou 4 com o erro
+    em `conferir-pacote.txt` ao lado do .exe (no --windowed nao ha' console).
+    """
+    import importlib
+    import traceback
+    try:
+        for nome in MODULOS_DO_PROGRAMA:
+            importlib.import_module(nome)
+        from cryptography.fernet import Fernet
+        Fernet(Fernet.generate_key()).encrypt(b"ok")
+        return 0
+    except BaseException:
+        erro = traceback.format_exc()
+        try:
+            destino = pathlib.Path(sys.executable).with_name("conferir-pacote.txt")
+            destino.write_text(erro, encoding="utf-8")
+        except OSError:
+            pass
+        if sys.stderr:
+            sys.stderr.write(erro)
+        return 4
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--sem-janela", action="store_true",
@@ -91,7 +126,12 @@ def main() -> int:
     p.add_argument("--relatorio", action="store_true",
                    help="gera o relatorio de diagnostico e sai")
     p.add_argument("-v", "--verboso", action="store_true")
+    p.add_argument("--conferir-pacote", action="store_true",
+                   help=argparse.SUPPRESS)  # o empacotar.py chama; ver la'
     args = p.parse_args()
+
+    if args.conferir_pacote:
+        return conferir_pacote()
 
     # A config vem antes do log: e' dela que sai o nome do PC no arquivo.
     if args.servico:

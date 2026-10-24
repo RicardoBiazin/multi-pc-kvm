@@ -9,6 +9,7 @@ PC -- a configuracao nao vai junto, cada maquina guarda a dela em
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import subprocess
@@ -95,6 +96,37 @@ def destino() -> pathlib.Path:
     return dist
 
 
+def binarios_abi3t() -> list[str]:
+    """`--add-binary` do python3t.dll, quando o Python o tiver.
+
+    No Python 3.15 o _rust.pyd do cryptography (wheel cp315-abi3t) importa
+    `python3t.dll`, que mora em `abi3t-compat\\` -- pasta que o interpretador
+    poe' no caminho de DLL sozinho, e que o PyInstaller 6.22 nao conhece. O
+    .exe saia sem ela e morria ao abrir: "DLL load failed while importing
+    _rust" (24/10/2026, v2.4.0). No `python app.py` tudo funcionava.
+    """
+    dll = pathlib.Path(sys.base_prefix) / "abi3t-compat" / "python3t.dll"
+    return ["--add-binary", f"{dll};."] if dll.exists() else []
+
+
+def conferir_pacote(exe: pathlib.Path) -> bool:
+    """Abre o .exe em `--conferir-pacote`: importa tudo o que a janela usa.
+
+    O `--relatorio` nao servia de prova: ele nao chega a importar o
+    protocolo, e foi assim que a v2.4.0 passou "abrindo" e quebrou no PC.
+    """
+    # RunAsInvoker: o .exe pede Administrador no manifesto, e sem isto o
+    # CreateProcess recusa com WinError 740. Importar modulos nao precisa.
+    ambiente = {**os.environ, "__COMPAT_LAYER": "RunAsInvoker"}
+    try:
+        r = subprocess.run([str(exe), "--conferir-pacote"], timeout=120,
+                           env=ambiente)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"conferencia do pacote nao rodou: {exc}")
+        return False
+    return r.returncode == 0
+
+
 def main() -> int:
     try:
         import PyInstaller  # noqa: F401
@@ -131,6 +163,7 @@ def main() -> int:
         "--hidden-import", "pythoncom",
         "--hidden-import", "win32timezone",
         "--exclude-module", "pytest",
+        *binarios_abi3t(),
         str(RAIZ / "app.py"),
     ]
     print(" ".join(comando), "\n")
@@ -139,6 +172,10 @@ def main() -> int:
         return resultado.returncode
 
     exe = saida / NOME_EXE
+    if not conferir_pacote(exe):
+        print(f"\nPACOTE QUEBRADO: {exe} nao importa os modulos do programa. "
+              "Rode-o com --conferir-pacote num console para ver o erro.")
+        return 3
     print(f"\nPronto: {exe}  ({exe.stat().st_size / 1e6:.1f} MB)")
     espelhar(exe)
     print("\nNa primeira vez o programa cria a configuracao; use a mesma chave")
