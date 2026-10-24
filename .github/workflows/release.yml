@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          python-version: '3.15'
 
       - name: Instalar as dependencias de runtime e o empacotador
         # requirements.txt tem o runtime; o PyInstaller so' e' preciso aqui.

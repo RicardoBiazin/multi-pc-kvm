@@ -1387,7 +1387,7 @@ def teste_instancia_unica() -> None:
 
 
 def teste_recebidos_do_usuario_certo() -> None:
-    """Arquivo colado tem de cair onde quem cola consegue ler.
+    r"""Arquivo colado tem de cair onde quem cola consegue ler.
 
     Falha de 19/08/2026: com o inicio automatico ligado, o agente roda como
     SYSTEM e gravava os arquivos recebidos em
@@ -1954,7 +1954,7 @@ def teste_recusa_no_desktop_seguro() -> None:
 
 
 def teste_pacote_apagado_por_baixo() -> None:
-    """O pacote do --onefile pode sumir com o programa rodando.
+    r"""O pacote do --onefile pode sumir com o programa rodando.
 
     28/09/2026: a pasta de extracao (%TEMP%\_MEIxxxxx) foi apagada com o
     processo vivo. Sobraram exatamente os 28 DLL/pyd que o Windows mantem
