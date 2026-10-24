@@ -22,11 +22,11 @@ jobs:
   release:
     runs-on: windows-latest   # KVM Windows (Win32 via ctypes), e o .exe e' Windows
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
 
