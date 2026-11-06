@@ -254,6 +254,53 @@ def teste_rede_mudou_de_ip() -> None:
         descoberta._ativo = antes
 
 
+def teste_janela_sem_segundo_icone() -> None:
+    """Regressao: a janela aberta pelo icone do agente virava um 2o icone.
+
+    Com o inicio automatico no ar, fechar a janela no X a recolhia para a
+    bandeja com icone proprio, cinza (o motor dela fica parado). O usuario via
+    dois programas abertos (06/11/2026).
+    """
+    import interface
+    import motor
+    print("janela com o agente no ar fecha de verdade")
+    nome = r"Local\MultiPCKVM-teste-" + str(time.time_ns())
+    checar("sem ninguem com a trava, nao ha' outro motor",
+           not motor.outro_motor_no_ar(nome))
+    dono = win32event_criar(nome)
+    checar("com a trava tomada, ha' outro motor", motor.outro_motor_no_ar(nome))
+    dono.Close()
+
+    def fechar(outro: bool, ativo: bool = False) -> list:
+        feito: list = []
+        j = interface.Janela.__new__(interface.Janela)
+        j.motor = type("M", (), {"ativo": lambda s: ativo,
+                                 "parar": lambda s: feito.append("parar")})()
+        j.var_bandeja = type("V", (), {"get": lambda s: True})()
+        j._recolher_para_bandeja = lambda: feito.append("bandeja") or True
+        j.destroy = lambda: feito.append("destroy")
+        antes = (motor.outro_motor_no_ar, interface.servico.rodando)
+        motor.outro_motor_no_ar = lambda: outro
+        interface.servico.rodando = lambda: False
+        try:
+            j._ao_fechar()
+        finally:
+            motor.outro_motor_no_ar, interface.servico.rodando = antes
+        return feito
+
+    checar("agente no ar: o X fecha, sem icone novo",
+           fechar(True) == ["parar", "destroy"], str(fechar(True)))
+    checar("sem agente: o X segue recolhendo para a bandeja",
+           fechar(False) == ["bandeja"], str(fechar(False)))
+    checar("motor desta janela rodando: recolhe (nao derruba o KVM)",
+           fechar(True, ativo=True) == ["bandeja"])
+
+
+def win32event_criar(nome: str):
+    import win32event
+    return win32event.CreateMutex(None, True, nome)
+
+
 def teste_teclado_numerico() -> None:
     """Regressao: o teclado numerico soltava setas no PC comandado.
 
@@ -2406,6 +2453,7 @@ def main() -> int:
     teste_injecao()
     teste_shift_direito()
     teste_teclado_numerico()
+    teste_janela_sem_segundo_icone()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()

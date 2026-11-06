@@ -62,6 +62,20 @@ def _tomar_a_trava(nome: str = TRAVA):
     return trava, True
 
 
+def outro_motor_no_ar(nome: str = TRAVA) -> bool:
+    """Algum OUTRO processo desta maquina segura a trava do motor agora?
+
+    So' abre o mutex para consultar, sem toma'-lo. Nao depende do COM do
+    Agendador, que numa janela lancada como SYSTEM pode nao responder.
+    """
+    try:
+        trava = win32event.OpenMutex(win32event.SYNCHRONIZE, False, nome)
+    except Exception:
+        return False
+    trava.Close()
+    return True
+
+
 class Motor:
     def __init__(self, cfg: dict):
         self.cfg = cfg

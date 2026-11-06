@@ -1192,6 +1192,17 @@ class Janela(tk.Tk):
     # -- bandeja e fechamento ----------------------------------------------
 
     def _ao_fechar(self) -> None:
+        # Com o inicio automatico no ar, quem fica na bandeja e' o icone DELE
+        # (verde, com "Abrir configuracao"). Recolher esta janela criava um
+        # SEGUNDO icone, cinza -- o motor daqui fica parado, porque quem roda e'
+        # o agente --, e o usuario via dois programas abertos. Fechou o cinza,
+        # o proximo "Abrir configuracao" trazia outro (06/11/2026). Aqui o X
+        # fecha de verdade: o compartilhamento segue no agente.
+        if not self.motor.ativo() and (motor.outro_motor_no_ar()
+                                       or servico.rodando()):
+            self.motor.parar()
+            self.destroy()
+            return
         if self.var_bandeja.get() and self._recolher_para_bandeja():
             return
         self.motor.parar()
