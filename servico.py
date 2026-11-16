@@ -569,12 +569,14 @@ def rodar_agente(cfg: dict) -> int:
     # icone sumir de vez, porque quem o criava era so' a janela -- e com a
     # tarefa no ar nao ha' janela nenhuma. O icone nasce e morre a cada troca
     # de desktop, junto com o agente.
+    icone = None
     try:
         import bandeja
-        if bandeja.criar(_abrir_janela, _encerrar_tudo, m, acoes=True,
-                         titulo="inicio automatico",
-                         rotulo_abrir="Abrir configuracao",
-                         rotulo_sair="Sair (volta no proximo logon)") is None:
+        icone = bandeja.criar(_abrir_janela, _encerrar_tudo, m, acoes=True,
+                              titulo="inicio automatico",
+                              rotulo_abrir="Abrir configuracao",
+                              rotulo_sair="Sair (volta no proximo logon)")
+        if icone is None:
             log.info("sem icone na bandeja (pystray indisponivel)")
     except Exception:
         log.warning("nao consegui por o icone na bandeja", exc_info=True)
@@ -593,3 +595,20 @@ def rodar_agente(cfg: dict) -> int:
                 return 1
     finally:
         m.parar()
+        tirar_da_bandeja(icone)
+
+
+def tirar_da_bandeja(icone) -> None:
+    """Remove o icone ANTES de o agente sair.
+
+    O agente sai a cada bloqueio/desbloqueio da tela para renascer no desktop
+    novo. Saindo sem tirar o icone, o Windows o deixava la' -- um icone morto,
+    que so' some quando o mouse passa por cima. A cada bloqueio, mais um: o
+    usuario via a bandeja cheia de copias do KVM (16/11/2026).
+    """
+    if icone is None:
+        return
+    try:
+        icone.stop()
+    except Exception:
+        log.debug("nao consegui tirar o icone da bandeja", exc_info=True)

@@ -1232,7 +1232,10 @@ class Janela(tk.Tk):
         # Fechar a JANELA nao para o inicio automatico: quem roda o KVM ali e'
         # o agente, noutro processo. Sem este aviso a janela some, o
         # compartilhamento continua, e a conclusao obvia e' "nao fecha".
-        if servico.rodando():
+        # Mas so' quando o agente NAO tem icone proprio a vista: com o motor
+        # dele no ar, o icone verde dele continua na bandeja, e perguntar a
+        # cada "Sair" deste icone era so' atrapalhar (16/11/2026).
+        if servico.rodando() and not motor.outro_motor_no_ar():
             if not messagebox.askokcancel(
                     conf.APP, "Fechar esta janela NAO para o compartilhamento: "
                                 "quem o mantem no ar e' o inicio automatico, "

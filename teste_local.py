@@ -296,6 +296,58 @@ def teste_janela_sem_segundo_icone() -> None:
            fechar(True, ativo=True) == ["bandeja"])
 
 
+def teste_agente_tira_o_icone() -> None:
+    """Regressao: cada bloqueio de tela deixava um icone morto na bandeja.
+
+    O agente sai a cada troca de desktop para renascer no novo, e saia sem
+    tirar o icone -- que o Windows mantem ate' o mouse passar por cima.
+    """
+    import bandeja
+    import motor
+    import servico
+    import sessao_win
+    print("agente tira o icone da bandeja ao sair")
+
+    class Icone:
+        parado = False
+
+        def stop(self):
+            Icone.parado = True
+
+    class MotorFalso:
+        def __init__(self, cfg): pass
+        def iniciar(self, cfg): pass
+        def ativo(self): return True
+        def parar(self): pass
+
+    entradas = iter(["Default", "Default", "Winlogon"])
+    antes = (sessao_win.meu_desktop, sessao_win.desktop_de_entrada,
+             motor.Motor, bandeja.criar, servico._gravar_desktop,
+             servico.INTERVALO_DE_VIGIA)
+    sessao_win.meu_desktop = lambda: "Default"
+    sessao_win.desktop_de_entrada = lambda: next(entradas)
+    motor.Motor = MotorFalso
+    bandeja.criar = lambda *a, **k: Icone()
+    servico._gravar_desktop = lambda d: None
+    servico.INTERVALO_DE_VIGIA = 0
+    try:
+        codigo = servico.rodar_agente({})
+    finally:
+        (sessao_win.meu_desktop, sessao_win.desktop_de_entrada, motor.Motor,
+         bandeja.criar, servico._gravar_desktop,
+         servico.INTERVALO_DE_VIGIA) = antes
+    checar("saiu pela troca de desktop",
+           codigo == sessao_win.SAIDA_TROCOU_DESKTOP, str(codigo))
+    checar("e tirou o icone antes de sair", Icone.parado)
+
+    class Teimoso:
+        def stop(self):
+            raise RuntimeError("pystray")
+    servico.tirar_da_bandeja(None)
+    servico.tirar_da_bandeja(Teimoso())
+    checar("icone que nao para nao derruba a saida", True)
+
+
 def win32event_criar(nome: str):
     import win32event
     return win32event.CreateMutex(None, True, nome)
@@ -2454,6 +2506,7 @@ def main() -> int:
     teste_shift_direito()
     teste_teclado_numerico()
     teste_janela_sem_segundo_icone()
+    teste_agente_tira_o_icone()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
