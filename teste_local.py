@@ -296,6 +296,221 @@ def teste_janela_sem_segundo_icone() -> None:
            fechar(True, ativo=True) == ["bandeja"])
 
 
+def teste_audio() -> None:
+    """Audio entre PCs: pacote cifrado, UDP de verdade, sem placa de som."""
+    import socket as so
+    import audio
+    print("audio: pacote, fonte e ouvinte")
+
+    chave = audio.chave_do_audio("segredo")
+    pcm = bytes(range(256)) * 4
+    pacote = audio.empacotar(chave, b"\x01\x02\x03\x04", 7, "PC-esq", 48000, 2, pcm)
+    volta = audio.desempacotar(chave, pacote)
+    checar("pacote cifrado volta inteiro",
+           volta == (b"\x01\x02\x03\x04", 7, "PC-esq", 48000, 2, pcm))
+    checar("o som nao aparece em claro no pacote", pcm[:64] not in pacote)
+    checar("chave errada e' recusada",
+           audio.desempacotar(audio.chave_do_audio("outra"), pacote) is None)
+    adulterado = bytearray(pacote)
+    adulterado[-1] ^= 1
+    checar("pacote adulterado e' recusado",
+           audio.desempacotar(chave, bytes(adulterado)) is None)
+    cab_trocado = bytearray(pacote)
+    cab_trocado[11] ^= 1  # a sequencia faz parte do que e' autenticado
+    checar("sequencia trocada e' recusada",
+           audio.desempacotar(chave, bytes(cab_trocado)) is None)
+    checar("lixo curto nao derruba", audio.desempacotar(chave, b"x") is None)
+    checar("cabe no MTU",
+           len(audio.empacotar(chave, b"abcd", 1, "DESKTOP-FS65BNN", 48000, 2,
+                               bytes(audio.PCM_POR_PACOTE))) < 1400)
+
+    # -- ida e volta por UDP real, com captura e saida de mentira --------------
+    class CapturaFalsa:
+        instancias: list = []
+
+        def __init__(self, ao_receber):
+            self.ao_receber, self.taxa, self.canais = ao_receber, 48000, 2
+            self.parada = False
+            CapturaFalsa.instancias.append(self)
+
+        def parar(self):
+            self.parada = True
+
+    saidas: dict = {}
+
+    class SaidaFalsa:
+        def __init__(self, taxa, canais, puxar):
+            self.taxa, self.canais, self.puxar = taxa, canais, puxar
+            self.parada = False
+            saidas[len(saidas)] = self
+
+        def parar(self):
+            self.parada = True
+
+    livre = so.socket(so.AF_INET, so.SOCK_DGRAM)
+    livre.bind(("127.0.0.1", 0))
+    porta = livre.getsockname()[1]
+    livre.close()
+
+    ouvinte = audio.Ouvinte("segredo", abrir_saida=SaidaFalsa, porta=porta)
+    fonte = audio.Fonte("segredo", "PC-esq", abrir_captura=CapturaFalsa)
+    try:
+        checar("sem destino, nao captura", not fonte.ativa())
+        ouvinte.definir({"PC-esq"})
+        fonte.definir_destinos([("127.0.0.1", porta)])
+        checar("com destino, captura", fonte.ativa() and len(CapturaFalsa.instancias) == 1)
+
+        som = bytes((i * 7) % 256 for i in range(40000))  # 40000 = multiplo de 4
+        for i in range(0, len(som), 3840):  # blocos de 20 ms, como o WASAPI
+            CapturaFalsa.instancias[0].ao_receber(som[i:i + 3840])
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 3 and not saidas:
+            time.sleep(0.02)
+        time.sleep(0.4)
+        checar("o ouvinte abriu uma saida para a fonte", len(saidas) == 1)
+        recebido = b""
+        if saidas:
+            s = saidas[0]
+            checar("no formato da fonte", (s.taxa, s.canais) == (48000, 2))
+            for _ in range(200):
+                bloco = s.puxar(960)
+                if bloco == bytes(960):
+                    break
+                recebido += bloco
+        checar("o que tocou e' o que a fonte capturou, na ordem",
+               len(recebido) > 8000 and som.startswith(recebido),
+               f"{len(recebido)} bytes")
+
+        # quem ouve esvaziou o buffer: falta de dado e' silencio, nao erro
+        checar("buffer vazio toca silencio do tamanho pedido",
+               saidas[0].puxar(1920) == bytes(1920))
+
+        # repetido e' descartado
+        antes = ouvinte.descartados
+        ouvinte._tratar(audio.empacotar(audio.chave_do_audio("segredo"),
+                                        CapturaFalsa and ouvinte._canais and
+                                        next(iter(ouvinte._canais)), 0, "PC-esq",
+                                        48000, 2, bytes(480)), time.monotonic())
+        checar("pacote velho/repetido e' descartado", ouvinte.descartados == antes + 1)
+
+        # fonte nao pedida e' ignorada
+        intruso = audio.empacotar(audio.chave_do_audio("segredo"), b"zzzz", 1,
+                                  "OUTRO-PC", 48000, 2, bytes(480))
+        ouvinte._tratar(intruso, time.monotonic())
+        checar("fonte que ninguem pediu nao abre saida", len(saidas) == 1)
+
+        # 'todos': uma saida por fonte
+        ouvinte.definir({"PC-esq", "OUTRO-PC"})
+        ouvinte._tratar(intruso, time.monotonic())
+        checar("com as duas pedidas, uma saida para cada", len(saidas) == 2)
+
+        # deixar de pedir uma fonte fecha a saida dela
+        ouvinte.definir({"PC-esq"})
+        checar("fonte que deixou de ser pedida tem a saida fechada",
+               saidas[1].parada and not saidas[0].parada)
+
+        fonte.definir_destinos([])
+        checar("sem destino, a captura para",
+               not fonte.ativa() and CapturaFalsa.instancias[0].parada)
+    finally:
+        fonte.parar()
+        ouvinte.parar()
+    checar("parar o ouvinte fecha todas as saidas", all(s.parada for s in saidas.values()))
+
+    # volume
+    canal = audio._Canal("x", 48000, 2, SaidaFalsa, lambda: 0.5)
+    canal.empurrar(bytes([0, 64] * 6000))  # amostras 0x4000 = 16384
+    meio = canal._puxar(8)
+    checar("volume 50% pela metade", meio[:2] == (8192).to_bytes(2, "little", signed=True),
+           str(meio[:2]))
+
+    # a captura que falha nao derruba quem chama
+    def quebra(_cb):
+        raise OSError("sem dispositivo")
+    f2 = audio.Fonte("s", "A", abrir_captura=quebra)
+    f2.definir_destinos([("127.0.0.1", 9)])
+    checar("captura que falha nao levanta e fica inativa", not f2.ativa())
+
+
+def teste_audio_roteamento() -> None:
+    """O servidor diz a cada fonte para quem mandar o som; so' quando muda."""
+    import audio
+    import servidor as srvmod
+    print("audio: o servidor encaminha os pedidos")
+
+    class Conn:
+        def __init__(self):
+            self.msgs = []
+
+        def enviar(self, m):
+            self.msgs.append(m)
+
+    class AudioFalso:
+        def __init__(self):
+            self.destinos, self.ouvindo = None, None
+
+        def enviar_para(self, d):
+            self.destinos = list(d)
+
+        def ouvir(self, f):
+            self.ouvindo = set(f)
+
+    srv = object.__new__(srvmod.Servidor)
+    srv.eu = "DIR"
+    srv.layout = lay.Layout([lay.PC("DIR", "10.0.0.2", 2, 1, True),
+                             lay.PC("ESQ", "10.0.0.1", 1, 1),
+                             lay.PC("TRAS", "10.0.0.3", 3, 1)])
+    srv.audio = AudioFalso()
+    srv.audio_pedidos, srv._audio_enviado = {}, {}
+    srv.ips_clientes = {"ESQ": "10.0.0.1", "TRAS": "10.0.0.3"}
+    srv._lock = threading.Lock()
+    esq, tras = Conn(), Conn()
+    srv.clientes = {"ESQ": esq, "TRAS": tras}
+
+    # o cliente ESQ quer ouvir o servidor (DIR) e o TRAS
+    srv._tratar_pedido = None
+    srv.ultimo_pong = {}
+    srv._tratar("ESQ", {"t": "audio", "fontes": ["DIR", "TRAS"]})
+    checar("o servidor passa a mandar o som dele ao ESQ",
+           srv.audio.destinos == [["10.0.0.1", audio.PORTA]], str(srv.audio.destinos))
+    checar("o TRAS e' avisado de que o ESQ o ouve",
+           tras.msgs == [{"t": "audio_envia", "destinos": [["10.0.0.1", audio.PORTA]]}],
+           str(tras.msgs))
+    checar("o ESQ (que so' ouve) nao recebe ordem de mandar",
+           esq.msgs == [{"t": "audio_envia", "destinos": []}] or esq.msgs == [])
+
+    n = len(tras.msgs)
+    srv._tratar("ESQ", {"t": "audio", "fontes": ["DIR", "TRAS"]})
+    checar("pedido repetido nao gera mensagem nova", len(tras.msgs) == n)
+
+    # o servidor tambem ouve o TRAS: o TRAS passa a mandar para os dois
+    srv.audio_pedidos["DIR"] = {"TRAS"}
+    srv._refazer_audio()
+    checar("com dois ouvintes, a fonte manda para os dois",
+           tras.msgs[-1]["destinos"] == [["10.0.0.1", audio.PORTA],
+                                         ["10.0.0.2", audio.PORTA]],
+           str(tras.msgs[-1]))
+
+    # o ESQ cai: ninguem mais manda som para ele
+    srv.audio_pedidos.pop("ESQ")
+    srv._refazer_audio()
+    checar("quem caiu deixa de receber o som",
+           srv.audio.destinos == [] and
+           tras.msgs[-1]["destinos"] == [["10.0.0.2", audio.PORTA]])
+
+    # uma fonte desconectada nao quebra nada, e volta a ser avisada ao entrar
+    del srv.clientes["TRAS"]
+    srv._refazer_audio()
+    checar("fonte desconectada nao levanta e fica sem registro",
+           "TRAS" not in srv._audio_enviado)
+    srv.clientes["TRAS"] = tras
+    antes = len(tras.msgs)
+    srv._refazer_audio()
+    checar("ao reconectar, a fonte recebe o pedido de novo (mensagem nova)",
+           len(tras.msgs) == antes + 1
+           and tras.msgs[-1]["destinos"] == [["10.0.0.2", audio.PORTA]])
+
+
 def teste_agente_tira_o_icone() -> None:
     """Regressao: cada bloqueio de tela deixava um icone morto na bandeja.
 
@@ -2507,6 +2722,8 @@ def main() -> int:
     teste_teclado_numerico()
     teste_janela_sem_segundo_icone()
     teste_agente_tira_o_icone()
+    teste_audio()
+    teste_audio_roteamento()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()

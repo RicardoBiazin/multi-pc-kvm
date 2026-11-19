@@ -41,6 +41,46 @@ def dica_do_icone(motor) -> str:
     return texto
 
 
+def _alternar_audio(motor, nome: str) -> None:
+    """Liga/desliga o som de `nome`. Grava no config: o agente (outro processo)
+    e a janela leem de la'."""
+    import configuracao as conf
+    atuais = set(motor.cfg.get("ouvir") or [])
+    atuais ^= {nome}
+    motor.ouvir(sorted(atuais))
+    try:
+        conf.gravar_chave("ouvir", sorted(atuais))
+    except OSError:
+        log.warning("nao consegui gravar o que ouvir no config.json", exc_info=True)
+
+
+def _itens_de_audio(pystray, motor) -> list:
+    """Um item marcavel por PC (menos este), e 'Nenhum'. Refeito a cada abertura."""
+    cfg = getattr(motor, "cfg", None) or {}
+    eu = cfg.get("este_pc", "")
+    outros = [p["nome"] for p in cfg.get("pcs", []) if p["nome"] != eu]
+    if not outros:
+        return [pystray.MenuItem("(nao ha' outros PCs)", None, enabled=False)]
+    itens = [pystray.MenuItem(
+        nome, lambda _i, n=nome: _alternar_audio(motor, n),
+        checked=lambda _i, n=nome: n in (motor.cfg.get("ouvir") or []))
+        for nome in outros]
+    if len(outros) > 1:
+        itens.append(pystray.Menu.SEPARATOR)
+        itens.append(pystray.MenuItem("Todos", lambda _i: _ouvir_varios(motor, outros)))
+    itens.append(pystray.MenuItem("Nenhum", lambda _i: _ouvir_varios(motor, [])))
+    return itens
+
+
+def _ouvir_varios(motor, nomes) -> None:
+    import configuracao as conf
+    motor.ouvir(list(nomes))
+    try:
+        conf.gravar_chave("ouvir", list(nomes))
+    except OSError:
+        log.warning("nao consegui gravar o que ouvir no config.json", exc_info=True)
+
+
 def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
           rotulo_abrir: str = "Abrir", rotulo_sair: str = "Sair"):
     """Devolve o icone (ja' rodando) ou None se o pystray nao estiver presente.
@@ -71,6 +111,9 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
         itens.append(pystray.MenuItem(rotulo_abrir, lambda: ao_abrir(),
                                       default=True))
     itens.append(estado)
+    if acoes:
+        itens.append(pystray.MenuItem("Ouvir o audio de", pystray.Menu(
+            lambda: _itens_de_audio(pystray, motor))))
     if acoes and ao_sair is not None:
         itens.append(pystray.Menu.SEPARATOR)
         itens.append(pystray.MenuItem(rotulo_sair, lambda: ao_sair()))

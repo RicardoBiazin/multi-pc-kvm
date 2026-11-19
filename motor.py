@@ -116,6 +116,21 @@ class Motor:
             partes.append("cursor aqui")
         return " | ".join(partes)
 
+    # -- audio --------------------------------------------------------------
+
+    def ouvir(self, fontes) -> None:
+        """De quais PCs tocar o som aqui. Vale ja' se o motor estiver no ar; se
+        nao estiver, vale quando ele subir (o papel le' `cfg["ouvir"]`)."""
+        fontes = list(fontes)
+        self.cfg["ouvir"] = fontes
+        if self.papel is not None and self.ativo():
+            self.papel.ouvir(fontes)
+
+    def volume(self, valor: float) -> None:
+        self.cfg["volume_audio"] = int(round(valor * 100))
+        if self.papel is not None:
+            self.papel.audio.volume(valor)
+
     # -- controle -----------------------------------------------------------
 
     def iniciar(self, cfg: dict) -> None:

@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.4.3"
+VERSAO = "2.5.0"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -180,6 +180,24 @@ def salvar(cfg: dict) -> pathlib.Path:
     caminho.write_text(json.dumps(gravavel, indent=2, ensure_ascii=False),
                        encoding="utf-8")
     return caminho
+
+
+def gravar_chave(chave: str, valor) -> None:
+    """Muda UMA chave do config.json em uso, sem tocar no resto.
+
+    Para o que a tela grava na hora (o que ouvir, o volume): salvar o config
+    inteiro levaria junto edicoes ainda pela metade. O agente do inicio
+    automatico, noutro processo, le' estas chaves do mesmo arquivo.
+    """
+    caminho = caminho_config()
+    try:
+        atual = json.loads(caminho.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        atual = {}
+    atual[chave] = valor
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    caminho.write_text(json.dumps(atual, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
 
 
 def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:

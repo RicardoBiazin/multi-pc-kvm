@@ -60,7 +60,7 @@ layout que você monta na janela.
    Administrador). Enquanto o programa está aberto ele se anuncia na rede, então
    deixe todos abertos enquanto configura.
 2. Clique em **Liberar no Firewall** nos dois PCs (cria as regras de entrada
-   para 24810/TCP e 24811/UDP). Se aparecer a faixa laranja avisando que a rede
+   para 24810/TCP e 24811-24812/UDP). Se aparecer a faixa laranja avisando que a rede
    é **Pública**, resolva isso primeiro: nesse modo o Windows bloqueia tudo o
    que vem de fora, mesmo com a regra criada. Vá em *Configurações > Rede e
    Internet*, clique na rede e mude para **Rede particular**, nos dois PCs.
@@ -247,6 +247,36 @@ dia vai para `uso-historico.jsonl`. Gravar em disco não é capricho: com o iní
 automático ligado, o agente morre e nasce a cada bloqueio de tela, e contagem só
 na memória zeraria várias vezes por dia.
 
+## Ouvir o áudio de outro PC
+
+Na parte de baixo da janela, **Ouvir o áudio de:** tem uma caixa por PC (menos
+este) e, havendo mais de um, **Todos**. Marque de quais PCs você quer ouvir o som
+**neste** PC; o **Volume** ao lado vale para tudo o que se ouve aqui. O mesmo
+menu existe no ícone da bandeja (**Ouvir o áudio de**), que é o jeito de mudar
+quando só o início automático está no ar. A escolha fica no `config.json`.
+
+O PC de origem **continua tocando nos próprios alto-falantes**: o programa copia
+o que ele toca (WASAPI *loopback*), não o desvia.
+
+- **Rede:** o som vai por UDP direto da origem para quem ouve, na porta **24812**
+  (o botão *Liberar no Firewall* abre essa porta junto com a 24811). Não passa
+  pelo canal de teclado e mouse, então um som atrasado nunca trava o cursor.
+- **Cifrado:** cada pacote vai com AES-GCM, chave derivada da chave
+  compartilhada. Pacote de outra chave, adulterado ou repetido é descartado.
+- **Só quando pedem:** a origem só captura enquanto alguém ouve; sem ouvinte,
+  não gasta CPU nem abre o dispositivo.
+- **Todos:** cada origem toca numa saída própria, e o mixer do Windows soma.
+- **Custo:** PCM sem compressão, cerca de 1,5 Mbit/s por origem. Em rede local
+  é folgado; por Wi-Fi fraco pode picotar.
+- **Atraso:** na ordem de 60 a 100 ms. Bom para vídeo, música e chamada; ruim
+  para jogo.
+
+**Limites:** o formato (taxa e canais) é o do PC de origem. Som surround (5.1,
+7.1) vira estéreo. Se os dois PCs usam taxas diferentes (44,1 e 48 kHz) a saída
+de quem ouve pode se recusar a abrir; o motivo aparece no Registro
+(*"nao consegui abrir a saida"*). Enquanto a origem está muda não chega pacote
+nenhum: é normal, o loopback do Windows não entrega silêncio.
+
 ## PC com mais de um monitor
 
 Cada PC ocupa **uma** célula no mapa, mesmo tendo vários monitores: a travessia
@@ -340,6 +370,7 @@ Sem elevação o Windows bloqueia captura e injeção sobre janelas elevadas
 | `app.py` | Ponto de entrada: abre a janela, ou `--sem-janela` para subir direto |
 | `interface.py` | Janela tkinter: papel, lista de PCs, mapa arrastável, rede, log |
 | `descoberta.py` | Farol UDP: anuncia este PC e acha os outros na LAN |
+| `audio.py` | Áudio entre PCs: captura WASAPI, UDP cifrado (AES-GCM), saída por origem |
 | `redes.py` | Placas via `GetAdaptersAddresses`: IP, Wi-Fi/cabo, máscara, broadcast |
 | `diagnostico.py` | Teste de conexão e regras de Firewall |
 | `relatorio.py` | Relatório de diagnóstico em arquivo, para compartilhar |

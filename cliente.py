@@ -24,6 +24,7 @@ import threading
 import time
 
 import alvo as alv
+import audio
 import clipboard_win
 import configuracao as conf
 import descoberta
@@ -78,6 +79,21 @@ class Cliente:
         self.ultimo_erro = ""
         self.config_mudou = False  # a interface redesenha quando ve isto
         self._avisos: dict[str, float] = {}
+        # Audio: de quais PCs este toca o som, e a fonte que manda o daqui.
+        self.audio = audio.Audio(cfg, self.eu)
+        self._ouvir = sorted(set(cfg.get("ouvir") or []))
+
+    def ouvir(self, fontes) -> None:
+        """Muda de quais PCs se toca o som. O servidor repassa o pedido a elas."""
+        self._ouvir = sorted(set(fontes))
+        self.audio.ouvir(self._ouvir)
+        self._pedir_audio()
+
+    def _pedir_audio(self) -> None:
+        try:
+            self.fila.put_nowait({"t": "audio", "fontes": list(self._ouvir)})
+        except queue.Full:
+            log.debug("fila cheia: o pedido de audio sai no proximo")
 
     def situacao(self) -> dict:
         servidor = self.layout.servidor()
@@ -128,6 +144,7 @@ class Cliente:
             # Desinstala os hooks: sem isto, parar e reiniciar deixaria a
             # instalacao antiga no lugar e o input passaria por dois conjuntos.
             self.comando.parar()
+            self.audio.parar()
 
     def _laco(self) -> None:
         while not self.parar.is_set():
@@ -198,6 +215,7 @@ class Cliente:
             return  # nada mudou; nao mexe no disco nem avisa a interface
 
         self.eu = meu_nome
+        self.audio.renomear(meu_nome)
         self.layout = lay.Layout.de_config(self.cfg)
         try:
             conf.salvar(self.cfg)
@@ -235,6 +253,10 @@ class Cliente:
         fim = threading.Event()
         sinc = clipboard_win.Sincronizador(conn.enviar, fim)
         sinc.start()
+        # O servidor nao guarda o pedido de audio de uma conexao que caiu.
+        self.audio.ouvir(self._ouvir)
+        if self._ouvir:
+            self._pedir_audio()
         # O input local sai por uma fila, e nao direto do callback do hook: o
         # `sendall` pode bloquear, e um hook lento e' desinstalado pelo Windows.
         threading.Thread(target=self._escoar, args=(conn, fim),
@@ -255,6 +277,7 @@ class Cliente:
             # Antes de tudo: se estavamos comandando, o input local esta'
             # bloqueado e sem a rede ele nunca mais seria liberado.
             self.comando.largar("a conexao com o servidor caiu")
+            self.audio.enviar_para([])  # sem o servidor ninguem pede o nosso som
             self._encerrar_remoto()
             fim.set()
             conn.fechar()
@@ -293,6 +316,11 @@ class Cliente:
             return
         if tipo == "ping":
             conn.enviar({"t": "pong", "ts": msg["ts"]})
+            return
+        if tipo == "audio_envia":
+            # O servidor diz quem esta' ouvindo ESTE PC. Lista vazia: parar.
+            destinos = [(d[0], int(d[1])) for d in msg.get("destinos") or []]
+            self.audio.enviar_para(destinos)
             return
         if tipo == "recusado":
             raise Recusado(msg.get("motivo", "sem motivo informado"))

@@ -581,9 +581,14 @@ def rodar_agente(cfg: dict) -> int:
     except Exception:
         log.warning("nao consegui por o icone na bandeja", exc_info=True)
 
+    config_visto = _mtime_do_config()
+    proxima_leitura = time.monotonic() + INTERVALO_DO_CONFIG
     try:
         while True:
             time.sleep(INTERVALO_DE_VIGIA)
+            if time.monotonic() >= proxima_leitura:
+                proxima_leitura = time.monotonic() + INTERVALO_DO_CONFIG
+                config_visto = _reler_audio(m, config_visto)
             alvo = trocou()
             if alvo:
                 log.info("o desktop de entrada virou %s; saindo para nascer la'",
@@ -596,6 +601,37 @@ def rodar_agente(cfg: dict) -> int:
     finally:
         m.parar()
         tirar_da_bandeja(icone)
+
+
+INTERVALO_DO_CONFIG = 2.0  # s entre olhadas no config.json por mudanca de audio
+
+
+def _mtime_do_config() -> float:
+    try:
+        return conf.caminho_config().stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _reler_audio(m, visto: float) -> float:
+    """A janela de configuracao e' OUTRO processo: o que ela grava em `ouvir` e
+    `volume_audio` chega ao agente pelo arquivo. Devolve o mtime visto."""
+    agora = _mtime_do_config()
+    if agora == visto:
+        return visto
+    try:
+        cfg = conf.carregar()
+        quer = sorted(set(cfg.get("ouvir") or []))
+        if quer != sorted(set(m.cfg.get("ouvir") or [])):
+            log.info("audio: a configuracao mudou, ouvindo agora: %s",
+                     ", ".join(quer) or "ninguem")
+            m.ouvir(quer)
+        volume = int(cfg.get("volume_audio", 100))
+        if volume != int(m.cfg.get("volume_audio", 100)):
+            m.volume(volume / 100)
+    except Exception:
+        log.debug("nao consegui reler o audio do config.json", exc_info=True)
+    return agora
 
 
 def tirar_da_bandeja(icone) -> None:

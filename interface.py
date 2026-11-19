@@ -62,6 +62,7 @@ class Janela(tk.Tk):
         self._icone_bandeja = None
         self._achados: dict[str, dict] = {}
         self._aviso_ate = 0.0
+        self._salvar_volume_id = None
 
         self.title(f"{conf.APP} v{conf.VERSAO} -- um teclado e um mouse para "
                    f"varios PCs")
@@ -311,6 +312,15 @@ class Janela(tk.Tk):
                                       command=self._parar, state="disabled")
         self.botao_parar.grid(row=0, column=7, padx=4)
 
+        # Audio: ouvir, neste PC, o som de outro(s). Os botoes sao refeitos a
+        # cada mudanca da lista de PCs (_desenhar_ouvir).
+        self.quadro_ouvir = ttk.Frame(baixo)
+        self.quadro_ouvir.grid(row=1, column=0, columnspan=8, sticky="w",
+                               pady=(6, 0))
+        self.var_ouvir: dict[str, tk.BooleanVar] = {}
+        self.var_ouvir_todos = tk.BooleanVar()
+        self.var_volume = tk.IntVar(value=int(self.cfg.get("volume_audio", 100)))
+
         self.var_aviso = tk.StringVar()
         self.rotulo_aviso = tk.Label(self, textvariable=self.var_aviso, anchor="w",
                                      justify="left",
@@ -501,12 +511,66 @@ class Janela(tk.Tk):
         self.var_avisar.set(bool(self.cfg.get("avisar_troca", True)))
         self._redesenhar()
 
+    def _desenhar_ouvir(self) -> None:
+        """Uma caixa por PC (menos este) e 'Todos', mais o volume."""
+        for filho in self.quadro_ouvir.winfo_children():
+            filho.destroy()
+        eu = self.cfg.get("este_pc", "")
+        outros = [p["nome"] for p in self._pcs() if p["nome"] != eu]
+        escolhidos = set(self.cfg.get("ouvir") or [])
+        ttk.Label(self.quadro_ouvir, text="Ouvir o audio de:").grid(row=0, column=0)
+        self.var_ouvir = {}
+        for i, nome in enumerate(outros, start=1):
+            var = tk.BooleanVar(value=nome in escolhidos)
+            self.var_ouvir[nome] = var
+            ttk.Checkbutton(self.quadro_ouvir, text=nome, variable=var,
+                            command=self._mudou_ouvir).grid(row=0, column=i,
+                                                            padx=(10, 0))
+        if len(outros) > 1:
+            self.var_ouvir_todos.set(bool(outros) and escolhidos >= set(outros))
+            ttk.Checkbutton(self.quadro_ouvir, text="Todos",
+                            variable=self.var_ouvir_todos,
+                            command=self._ouvir_todos).grid(
+                row=0, column=len(outros) + 1, padx=(10, 0))
+        coluna = len(outros) + 3
+        ttk.Label(self.quadro_ouvir, text="Volume").grid(row=0, column=coluna,
+                                                         padx=(24, 4))
+        ttk.Scale(self.quadro_ouvir, from_=0, to=100, variable=self.var_volume,
+                  length=110, command=lambda _v: self._mudou_volume()
+                  ).grid(row=0, column=coluna + 1)
+
+    def _ouvir_todos(self) -> None:
+        for var in self.var_ouvir.values():
+            var.set(self.var_ouvir_todos.get())
+        self._mudou_ouvir()
+
+    def _mudou_ouvir(self) -> None:
+        escolhidos = [n for n, v in self.var_ouvir.items() if v.get()]
+        self.cfg["ouvir"] = escolhidos
+        if self.var_ouvir_todos.get() and len(escolhidos) != len(self.var_ouvir):
+            self.var_ouvir_todos.set(False)
+        # Grava SO' esta chave: o resto da tela pode estar pela metade, e o
+        # agente do inicio automatico (outro processo) le' esta mesma chave do
+        # arquivo para saber o que tocar.
+        conf.gravar_chave("ouvir", escolhidos)
+        self.motor.ouvir(escolhidos)
+
+    def _mudou_volume(self) -> None:
+        volume = int(self.var_volume.get())
+        self.cfg["volume_audio"] = volume
+        self.motor.volume(volume / 100)
+        if self._salvar_volume_id is not None:
+            self.after_cancel(self._salvar_volume_id)
+        self._salvar_volume_id = self.after(
+            600, lambda: conf.gravar_chave("volume_audio", volume))
+
     def _redesenhar(self) -> None:
         nomes = [p["nome"] for p in self._pcs()]
         self.combo_eu["values"] = nomes
         if self.cfg.get("este_pc") not in nomes and nomes:
             self.cfg["este_pc"] = nomes[0]
         self.var_eu.set(self.cfg.get("este_pc", ""))
+        self._desenhar_ouvir()
         eu = self._eu()
         self.var_papel.set("servidor" if (eu and eu.get("servidor")) else "cliente")
 

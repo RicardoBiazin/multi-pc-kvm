@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 
+import audio
 import borda
 import clipboard_win
 import entrada_win as ew
@@ -51,6 +52,13 @@ class Servidor:
         # responde os pings, um travado nao manda mais nada.
         self.ultimo_pong: dict[str, float] = {}
         self.sinc: clipboard_win.Sincronizador | None = None
+        # Audio. O servidor e' o eixo: cada PC diz a ELE o que quer ouvir, e ele
+        # diz a cada fonte para quem mandar. Os pacotes de som vao direto da
+        # fonte ao ouvinte, por UDP (audio.py); aqui passa so' a combinacao.
+        self.audio = audio.Audio(cfg, self.eu)
+        self.audio_pedidos: dict[str, set[str]] = {}  # ouvinte -> fontes
+        self.ips_clientes: dict[str, str] = {}
+        self._audio_enviado: dict[str, list] = {}     # ultima lista mandada a cada fonte
         self._lock = threading.Lock()
         self._avisos: dict[str, float] = {}
         self.ultimo_erro = ""
@@ -90,6 +98,49 @@ class Servidor:
                 "erro": "" if conectados else self.ultimo_erro,
                 "esperados": [p.nome for p in self.layout.pcs
                               if p.nome != self.eu]}
+
+    # -- audio --------------------------------------------------------------
+
+    def ouvir(self, fontes) -> None:
+        """De quais PCs ESTE (o servidor) toca o som."""
+        fontes = set(fontes)
+        self.audio.ouvir(fontes)
+        with self._lock:
+            self.audio_pedidos[self.eu] = fontes
+        self._refazer_audio()
+
+    def _ip_de(self, nome: str) -> str:
+        """IP pelo qual os outros PCs alcancam `nome`."""
+        if nome == self.eu:
+            pc = self.layout.por_nome(self.eu)
+            return pc.ip if pc is not None else ""
+        return self.ips_clientes.get(nome, "")
+
+    def _refazer_audio(self) -> None:
+        """Diz a cada fonte para quem mandar o som. So' fala se mudou."""
+        with self._lock:
+            pedidos = {o: set(f) for o, f in self.audio_pedidos.items()}
+            conectados = dict(self.clientes)
+        for pc in self.layout.pcs:
+            fonte = pc.nome
+            destinos = sorted(
+                [self._ip_de(o), audio.PORTA] for o, f in pedidos.items()
+                if fonte in f and o != fonte and self._ip_de(o))
+            conn = conectados.get(fonte)
+            if fonte != self.eu and conn is None:
+                self._audio_enviado.pop(fonte, None)  # volta a falar quando entrar
+                continue
+            if self._audio_enviado.get(fonte) == destinos:
+                continue
+            if fonte == self.eu:
+                self._audio_enviado[fonte] = destinos
+                self.audio.enviar_para(destinos)
+                continue
+            try:
+                conn.enviar({"t": "audio_envia", "destinos": destinos})
+                self._audio_enviado[fonte] = destinos
+            except Exception:
+                log.debug("falha ao avisar '%s' do audio", fonte)
 
     # -- ciclo de vida ------------------------------------------------------
 
@@ -176,6 +227,7 @@ class Servidor:
         sinc = clipboard_win.Sincronizador(self.difundir, self.parar)
         sinc.start()
         self.sinc = sinc
+        self.ouvir(self.cfg.get("ouvir") or [])  # o que a configuracao pede
 
         try:
             while not self.parar.is_set():
@@ -194,6 +246,7 @@ class Servidor:
             ouvinte.close()
             self.parar.set()
             self.captura.parar()  # desinstala os hooks
+            self.audio.parar()
             with self._lock:
                 conexoes = list(self.clientes.values())
             for conn in conexoes:
@@ -254,9 +307,12 @@ class Servidor:
             antiga = self.clientes.pop(nome, None)
             self.clientes[nome] = conn
             self.ultimo_pong[nome] = time.monotonic()  # nasce vivo
+            self.ips_clientes[nome] = endereco[0]
+        self._audio_enviado.pop(nome, None)  # cliente novo: ainda nao sabe de nada
         if antiga is not None:
             antiga.fechar()  # reconexao: derruba a sessao velha
         self.controle.conectados.add(nome)
+        self._refazer_audio()
         telas = ola.get("monitores") or []
         log.info("'%s' conectado de %s (tela %s, %d monitor(es)%s)", nome,
                  endereco[0], ola.get("tela"), len(telas) or 1,
@@ -283,8 +339,15 @@ class Servidor:
                 if self.clientes.get(nome) is conn:
                     del self.clientes[nome]
                     self.ultimo_pong.pop(nome, None)
+                    self.audio_pedidos.pop(nome, None)  # quem caiu nao ouve mais
                     self.controle.cliente_caiu(nome)
+                    caiu = True
+                else:
+                    caiu = False
             conn.fechar()
+            if caiu:
+                self._audio_enviado.pop(nome, None)
+                self._refazer_audio()
             self.ao_mudar()
 
     def _tratar(self, nome: str, msg: dict) -> None:
@@ -320,6 +383,10 @@ class Servidor:
             if self.sinc is not None:
                 self.sinc.aplicar_arquivo(msg)
             self.difundir(msg, excluir=nome)
+        elif tipo == "audio":
+            with self._lock:
+                self.audio_pedidos[nome] = {str(f) for f in msg.get("fontes") or []}
+            self._refazer_audio()
         elif tipo == "pong":
             ida_volta = (time.perf_counter() - msg["ts"]) * 1000
             if ida_volta > 30:

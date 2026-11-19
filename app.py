@@ -77,7 +77,7 @@ def conferir_o_proprio_pacote() -> str:
 
 
 MODULOS_DO_PROGRAMA = (
-    "alvo", "arquivos", "aviso", "bandeja", "borda", "cliente",
+    "alvo", "arquivos", "audio", "aviso", "bandeja", "borda", "cliente",
     "clipboard_win", "configuracao", "contador", "descoberta", "diagnostico",
     "entrada_win", "interface", "layout", "motor", "protocolo", "redes",
     "relatorio", "servico", "servidor", "sessao_win", "tema",
@@ -95,6 +95,7 @@ def conferir_pacote() -> int:
     try:
         for nome in MODULOS_DO_PROGRAMA:
             importlib.import_module(nome)
+        import pyaudiowpatch  # o som: tem de estar no pacote (PortAudio dentro)
         from cryptography.fernet import Fernet
         Fernet(Fernet.generate_key()).encrypt(b"ok")
         return 0

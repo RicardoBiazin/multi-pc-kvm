@@ -18,6 +18,7 @@ import subprocess
 import sys
 from ctypes import wintypes
 
+import audio
 import redes
 
 log = logging.getLogger("diagnostico")
@@ -242,8 +243,10 @@ def liberar(porta_tcp: int, porta_udp: int) -> tuple[bool, str]:
         _netsh("delete", "rule", f"name={nome}")
 
     erros = []
+    # A regra UDP cobre a busca na rede e o audio entre PCs (audio.PORTA).
+    udp = f"{porta_udp},{audio.PORTA}"
     for nome, protocolo, porta in ((REGRA_TCP, "TCP", porta_tcp),
-                                   (REGRA_UDP, "UDP", porta_udp)):
+                                   (REGRA_UDP, "UDP", udp)):
         argumentos = ["add", "rule", f"name={nome}", "dir=in", "action=allow",
                       f"protocol={protocolo}", f"localport={porta}",
                       "enable=yes"]
@@ -269,7 +272,7 @@ def liberar(porta_tcp: int, porta_udp: int) -> tuple[bool, str]:
     alcance = (f"para {conf.APP_ARQUIVO}.exe, em todos os perfis de rede" if exe
                else "para as redes privada e de dominio (rodando do codigo-fonte, "
                     "sem executavel para prender a regra)")
-    return True, (f"liberados TCP {porta_tcp} e UDP {porta_udp} "
+    return True, (f"liberados TCP {porta_tcp} e UDP {udp} "
                   f"{alcance}.{aviso}")
 
 
