@@ -18,6 +18,7 @@ import ctypes
 import ipaddress
 import logging
 import socket
+import struct
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -103,10 +104,16 @@ IP_ADAPTER_ADDRESSES._fields_ = [
     ("OperStatus", ctypes.c_int),
 ]
 
+iphlpapi.GetBestInterface.restype = wintypes.DWORD
+iphlpapi.GetBestInterface.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
 iphlpapi.GetAdaptersAddresses.restype = wintypes.ULONG
 iphlpapi.GetAdaptersAddresses.argtypes = [
     wintypes.ULONG, wintypes.ULONG, ctypes.c_void_p,
     ctypes.POINTER(IP_ADAPTER_ADDRESSES), ctypes.POINTER(wintypes.ULONG)]
+
+
+# Switches INTERNOS do Hyper-V/WSL: NAT para as VMs, nao levam a outro PC.
+INTERNAS_DO_HYPERV = ("default switch", "wsl", "nat")
 
 
 @dataclass
@@ -117,6 +124,10 @@ class Placa:
     descricao: str
     tipo: str          # "cabo", "Wi-Fi", ...
     virtual: bool
+    indice: int = 0    # IfIndex, para comparar com a saida padrao
+    # "vEthernet (...)" de um switch EXTERNO do Hyper-V: a placa fisica fica
+    # presa ao switch e o IP do PC mora nele. Parece virtual e e' a rede real.
+    hyperv_externa: bool = False
 
     @property
     def broadcast(self) -> str:
@@ -150,6 +161,46 @@ def _ipv4_de(endereco: SOCKET_ADDRESS) -> str | None:
     return socket.inet_ntoa(octetos)
 
 
+def _hyperv_externo(tipo: int, descricao: str, nome: str) -> bool:
+    """E' um adaptador do Hyper-V que NAO e' dos switches internos (NAT/WSL)?
+
+    Quem instala o Hyper-V e cria um switch externo (uma VM na mesma LAN do
+    PC) passa o IP da placa fisica para o `vEthernet (...)`. Para o programa
+    isso virou "nenhuma placa de rede ativa": sem anuncio na rede, sem teste
+    de conexao, e o IP novo do PC nunca chegava ao outro lado (22/11/2026).
+    """
+    texto = f"{descricao} {nome}".lower()
+    return ("hyper-v" in texto
+            and not any(i in texto for i in INTERNAS_DO_HYPERV))
+
+
+def _indice_da_saida() -> int:
+    """IfIndex da placa que o Windows usa para sair para a internet (0 = nenhum)."""
+    indice = wintypes.DWORD(0)
+    destino = struct.unpack("<I", socket.inet_aton("8.8.8.8"))[0]
+    try:
+        if iphlpapi.GetBestInterface(destino, ctypes.byref(indice)) == 0:
+            return int(indice.value)
+    except OSError:
+        pass
+    return 0
+
+
+def so_as_reais(placas: list[Placa], saida: int = 0) -> list[Placa]:
+    """Descarta virtuais, loopback e APIPA -- menos o switch externo do Hyper-V.
+
+    Esse entra quando e' a saida padrao do Windows, ou quando nao ha' nenhuma
+    outra placa real (ele e' a unica rede do PC).
+    """
+    reais = [p for p in placas
+             if not p.virtual and not p.ip.startswith("169.254.")]
+    externas = [p for p in placas
+                if p.virtual and p.hyperv_externa
+                and not p.ip.startswith("169.254.")
+                and (p.indice == saida or not reais)]
+    return reais + [p for p in externas if p not in reais]
+
+
 def listar(so_reais: bool = True) -> list[Placa]:
     """Placas IPv4 ativas. Com `so_reais`, descarta virtuais, loopback e APIPA."""
     tamanho = wintypes.ULONG(15000)
@@ -177,6 +228,7 @@ def listar(so_reais: bool = True) -> list[Placa]:
         virtual = (a.IfType == IF_LOOPBACK
                    or any(m in descricao.lower() or m in nome.lower()
                           for m in VIRTUAIS))
+        externa = _hyperv_externo(a.IfType, descricao, nome)
         if a.OperStatus == OPER_UP:
             unicast = a.FirstUnicastAddress
             while unicast:
@@ -187,13 +239,13 @@ def listar(so_reais: bool = True) -> list[Placa]:
                         ip=ip, prefixo=u.OnLinkPrefixLength, nome=nome,
                         descricao=descricao,
                         tipo=NOMES_DE_TIPO.get(a.IfType, f"tipo {a.IfType}"),
-                        virtual=virtual))
+                        virtual=virtual, indice=a.IfIndex,
+                        hyperv_externa=externa))
                 unicast = u.Next if u.Next else None
         adaptador = a.Next if a.Next else None
 
     if so_reais:
-        placas = [p for p in placas
-                  if not p.virtual and not p.ip.startswith("169.254.")]
+        placas = so_as_reais(placas, _indice_da_saida())
     # Cabo antes de Wi-Fi: numa rede mista o cabo costuma ser o caminho bom.
     ordem = {"cabo": 0, "Wi-Fi": 1}
     placas.sort(key=lambda p: (ordem.get(p.tipo, 9), p.ip))

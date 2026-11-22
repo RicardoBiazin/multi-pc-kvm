@@ -49,17 +49,24 @@ _ativo: "Farol | None" = None  # o farol no ar neste processo, se houver
 def ip_do_servidor(nome: str, chave: str) -> str:
     """IP pelo qual o servidor `nome` esta' se anunciando agora, ou "".
 
-    So' vale um anuncio de SERVIDOR com o mesmo nome e a mesma impressao da
-    chave: o pacote UDP nao e' autenticado, entao o pior que um anuncio falso
-    consegue e' uma tentativa de conexao que o handshake HMAC recusa.
+    So' vale um anuncio de SERVIDOR com a mesma impressao da chave (e o mesmo
+    nome, ou o unico servidor da rede): o pacote UDP nao e' autenticado, entao
+    o pior que um anuncio falso consegue e' uma tentativa de conexao que o
+    handshake HMAC recusa.
     """
     farol = _ativo
-    if farol is None or not nome:
+    if farol is None:
         return ""
-    for d in farol.lista():
-        if (d["nome"] == nome and d["papel"] == "servidor"
-                and d["chave"] == chave):
+    servidores = [d for d in farol.lista()
+                  if d["papel"] == "servidor" and d["chave"] == chave]
+    for d in servidores:
+        if d["nome"] == nome:
             return d["ip"]
+    # Outro nome: o PC do servidor foi renomeado ou trocado (22/11/2026: de
+    # "DESKTOP-FS65BNN" para "PC-dir server"). Com a chave igual e UM unico
+    # servidor na rede, so' pode ser ele; com mais de um, nao se adivinha.
+    if len(servidores) == 1:
+        return servidores[0]["ip"]
     return ""
 
 

@@ -225,8 +225,15 @@ def teste_rede_mudou_de_ip() -> None:
                descoberta.ip_do_servidor("SRV", chave) == "10.9.9.9")
         checar("anuncio com outra chave nao vale",
                descoberta.ip_do_servidor("SRV", "outra") == "")
-        checar("anuncio de outro nome nao vale",
+        checar("servidor renomeado: o unico anunciando, com a mesma chave, vale",
+               descoberta.ip_do_servidor("X", chave) == "10.9.9.9")
+        descoberta._ativo = type("F", (), {"lista": lambda s: [
+            anuncio, {**anuncio, "nome": "OUTRO", "ip": "10.8.8.8"}]})()
+        checar("dois servidores e nenhum com o nome: nao adivinha",
                descoberta.ip_do_servidor("X", chave) == "")
+        checar("dois servidores: o do nome certo ganha",
+               descoberta.ip_do_servidor("OUTRO", chave) == "10.8.8.8")
+        descoberta._ativo = type("F", (), {"lista": lambda s: [anuncio]})()
 
         tentativas: list = []
 
@@ -430,6 +437,45 @@ def teste_audio() -> None:
     f2 = audio.Fonte("s", "A", abrir_captura=quebra)
     f2.definir_destinos([("127.0.0.1", 9)])
     checar("captura que falha nao levanta e fica inativa", not f2.ativa())
+
+
+def teste_switch_externo_do_hyperv() -> None:
+    """Regressao: PC com a placa presa a um switch externo do Hyper-V ficava
+    com "nenhuma placa de rede ativa" (22/11/2026)."""
+    import redes
+    print("Hyper-V: o switch externo e' a rede do PC")
+
+    def placa(ip, nome, desc, virtual, externa, indice):
+        return redes.Placa(ip, 24, nome, desc, "cabo", virtual, indice, externa)
+
+    ext = placa("192.168.0.25", "vEthernet (SOCLITE-LAN)",
+                "Hyper-V Virtual Ethernet Adapter #2", True, True, 40)
+    nat = placa("172.31.96.1", "vEthernet (Default Switch)",
+                "Hyper-V Virtual Ethernet Adapter", True, False, 21)
+    cabo = placa("192.168.0.30", "Ethernet", "Realtek PCIe GBE", False, False, 5)
+    vpn = placa("10.8.0.6", "OpenVPN TAP-Windows6", "TAP-Windows Adapter V9",
+                True, False, 9)
+
+    checar("so' o switch externo: ele e' a rede",
+           redes.so_as_reais([ext, nat]) == [ext])
+    checar("o switch interno (Default Switch/WSL) nunca entra",
+           nat not in redes.so_as_reais([ext, nat, cabo], saida=40))
+    checar("com placa real E o switch fora da saida padrao, so' a real",
+           redes.so_as_reais([ext, cabo], saida=5) == [cabo])
+    checar("com placa real e o switch sendo a saida padrao, entram as duas",
+           redes.so_as_reais([ext, cabo], saida=40) == [cabo, ext])
+    checar("VPN continua de fora", redes.so_as_reais([ext, vpn]) == [ext])
+    checar("APIPA continua de fora",
+           redes.so_as_reais([placa("169.254.1.1", "vEthernet (X)",
+                                    "Hyper-V Virtual Ethernet Adapter",
+                                    True, True, 3)]) == [])
+    checar("so' VPN e switch interno: nada real", redes.so_as_reais([vpn, nat]) == [])
+    checar("deteccao pelo nome",
+           redes._hyperv_externo(6, "Hyper-V Virtual Ethernet Adapter #2",
+                                 "vEthernet (SOCLITE-LAN)")
+           and not redes._hyperv_externo(6, "Hyper-V Virtual Ethernet Adapter",
+                                         "vEthernet (Default Switch)")
+           and not redes._hyperv_externo(6, "Realtek PCIe GBE", "Ethernet"))
 
 
 def teste_audio_roteamento() -> None:
@@ -2724,6 +2770,7 @@ def main() -> int:
     teste_agente_tira_o_icone()
     teste_audio()
     teste_audio_roteamento()
+    teste_switch_externo_do_hyperv()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()
     teste_renomeacao_e_tema()
