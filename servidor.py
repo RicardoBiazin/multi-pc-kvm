@@ -463,11 +463,18 @@ class Servidor:
             if self.clientes.get(nome) is conn:
                 del self.clientes[nome]
                 self.ultimo_pong.pop(nome, None)
+                self.audio_pedidos.pop(nome, None)  # quem caiu nao ouve mais
                 self.controle.cliente_caiu(nome)
                 caiu = True
         if caiu:
             log.warning("'%s' %s -- comando de volta ao servidor", nome, motivo)
             conn.fechar(f"derrubado por nos: {motivo}")
+            # Sem isto o som seguia indo para quem ja' foi derrubado: o
+            # `finally` de `_receber_cliente` so' limpa quando e' ELE que tira
+            # o cliente da lista (visto em 27/11/2026: "tocando o som" na
+            # esquerda 9 s depois de derrubada).
+            self._audio_enviado.pop(nome, None)
+            self._refazer_audio()
             self.ao_mudar()
 
     def _vigiar(self) -> None:

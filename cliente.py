@@ -45,6 +45,11 @@ INTERVALO_DO_PEDIDO = 0.5  # s entre dois 'assumir' -- o mouse fica encostado
 # fechar o socket, e nao para latencia. Cortar cedo demais faria a travessia
 # falhar em rede lenta (ja' houve ida-e-volta de 6 s neste par de PCs).
 ESPERA_MAXIMA = 5.0  # s
+# O servidor manda um ping a cada 2,5 s. Se NADA chega por este tempo, a conexao
+# morreu em silencio (nem FIN, nem erro): o recv bloqueante esperaria o timeout
+# do TCP do Windows -- 5 minutos, vistos em 27/11/2026 (21:35 a 21:41) --, e o
+# PC ficou todo esse tempo sem conseguir passar o mouse. Quatro pings perdidos.
+SEM_SINAL_DO_SERVIDOR = 10.0  # s
 
 
 class Recusado(Exception):
@@ -82,6 +87,8 @@ class Cliente:
         # Audio: de quais PCs este toca o som, e a fonte que manda o daqui.
         self.audio = audio.Audio(cfg, self.eu)
         self._ouvir = sorted(set(cfg.get("ouvir") or []))
+        self._sinal = time.monotonic()  # ultima vez que o servidor deu sinal
+        self._aplicando = False
 
     def ouvir(self, fontes) -> None:
         """Muda de quais PCs se toca o som. O servidor repassa o pedido a elas."""
@@ -262,9 +269,20 @@ class Cliente:
         threading.Thread(target=self._escoar, args=(conn, fim),
                          name="rede-tx", daemon=True).start()
         espera = ESPERA_RECONEXAO
+        self._sinal = time.monotonic()
+        self._aplicando = False
+        threading.Thread(target=self._vigiar_servidor, args=(conn, fim),
+                         name="vigia-servidor", daemon=True).start()
         try:
             while not self.parar.is_set():
-                self._aplicar(conn, sinc, conn.receber())
+                msg = conn.receber()
+                self._sinal = time.monotonic()
+                self._aplicando = True
+                try:
+                    self._aplicar(conn, sinc, msg)
+                finally:
+                    self._aplicando = False
+                    self._sinal = time.monotonic()
         except Recusado as exc:
             # Configuracao errada: reconectar em 3s so' encheria o log.
             self.ultimo_erro = str(exc)
@@ -282,6 +300,22 @@ class Cliente:
             fim.set()
             conn.fechar()
         return espera
+
+    def _vigiar_servidor(self, conn: protocolo.Conexao,
+                         fim: threading.Event) -> None:
+        """Fecha a conexao que ficou muda: o laco de recepcao acorda e reconecta.
+
+        Nao conta o tempo em que a propria recepcao esta' ocupada aplicando uma
+        mensagem (arquivo grande, clipboard): ai' a rede nao tem culpa.
+        """
+        while not fim.wait(1.0) and not self.parar.is_set():
+            mudo = time.monotonic() - self._sinal
+            if mudo > SEM_SINAL_DO_SERVIDOR and not self._aplicando:
+                log.warning("o servidor ficou %.0f s sem dar sinal; fechando a "
+                            "conexao para reconectar", mudo)
+                self.ultimo_erro = f"servidor sem sinal ha' {mudo:.0f} s"
+                conn.fechar("servidor sem sinal")
+                return
 
     def _escoar(self, conn: protocolo.Conexao, fim: threading.Event) -> None:
         """Manda ao servidor o que o teclado e o mouse daqui produziram."""

@@ -557,6 +557,95 @@ def teste_audio_roteamento() -> None:
            and tras.msgs[-1]["destinos"] == [["10.0.0.2", audio.PORTA]])
 
 
+def teste_conexao_muda() -> None:
+    """Regressao: a conexao que morria em silencio deixava o PC 5 minutos sem
+    passar o mouse (27/11/2026, 21:35 a 21:41). E o som seguia indo para o
+    cliente que o servidor ja' tinha derrubado."""
+    import audio
+    import servidor as srvmod
+    print("conexao muda: o cliente reconecta; o servidor limpa o som")
+
+    class Conn:
+        def __init__(self):
+            self.fechada = ""
+
+        def fechar(self, motivo=""):
+            self.fechada = motivo or "sim"
+
+    def cli():
+        c = cliente.Cliente.__new__(cliente.Cliente)
+        c.parar = threading.Event()
+        c.ultimo_erro = ""
+        c._sinal, c._aplicando = time.monotonic(), False
+        return c
+
+    limite = cliente.SEM_SINAL_DO_SERVIDOR
+    cliente.SEM_SINAL_DO_SERVIDOR = 0.2
+    try:
+        # sem sinal nenhum -> fecha
+        c, conn, fim = cli(), Conn(), threading.Event()
+        c._sinal = time.monotonic() - 5
+        t = threading.Thread(target=c._vigiar_servidor, args=(conn, fim), daemon=True)
+        t.start(); t.join(3)
+        checar("servidor mudo por mais que o limite: a conexao e' fechada",
+               conn.fechada == "servidor sem sinal" and not t.is_alive())
+        checar("e o motivo fica para a interface", "sem sinal" in c.ultimo_erro)
+
+        # ocupado aplicando uma mensagem -> a rede nao tem culpa
+        c, conn, fim = cli(), Conn(), threading.Event()
+        c._sinal, c._aplicando = time.monotonic() - 5, True
+        t = threading.Thread(target=c._vigiar_servidor, args=(conn, fim), daemon=True)
+        t.start(); time.sleep(2.3)
+        checar("aplicando mensagem (arquivo grande): nao derruba", not conn.fechada)
+        fim.set(); t.join(3)
+        checar("o vigia para quando a conexao acaba", not t.is_alive())
+
+        # sinal fresco -> nao fecha
+        c, conn, fim = cli(), Conn(), threading.Event()
+        t = threading.Thread(target=c._vigiar_servidor, args=(conn, fim), daemon=True)
+        t.start()
+        for _ in range(8):
+            c._sinal = time.monotonic()
+            time.sleep(0.25)
+        checar("sinal em dia: nao fecha", not conn.fechada)
+        fim.set(); t.join(3)
+    finally:
+        cliente.SEM_SINAL_DO_SERVIDOR = limite
+
+    # servidor: derrubar o cliente que parou de responder tambem para o som
+    class AudioFalso:
+        destinos = None
+
+        def enviar_para(self, d):
+            self.destinos = list(d)
+
+    class Controle:
+        def cliente_caiu(self, nome):
+            pass
+
+    srv = object.__new__(srvmod.Servidor)
+    srv.eu = "DIR"
+    srv.layout = lay.Layout([lay.PC("DIR", "10.0.0.2", 2, 1, True),
+                             lay.PC("ESQ", "10.0.0.1", 1, 1)])
+    srv.audio = AudioFalso()
+    srv.audio_pedidos, srv._audio_enviado = {"ESQ": {"DIR"}}, {}
+    srv.ips_clientes = {"ESQ": "10.0.0.1"}
+    srv._lock = threading.Lock()
+    srv.ultimo_pong = {"ESQ": 0.0}
+    srv.controle = Controle()
+    srv.ao_mudar = lambda: None
+    conn = Conn()
+    srv.clientes = {"ESQ": conn}
+    srv._refazer_audio()
+    checar("antes da queda, o som vai para o ESQ",
+           srv.audio.destinos == [["10.0.0.1", audio.PORTA]])
+    srv._derrubar("ESQ", conn, "parou de responder")
+    checar("derrubado: o pedido de som do ESQ some", "ESQ" not in srv.audio_pedidos)
+    checar("derrubado: o servidor para de mandar som para ele",
+           srv.audio.destinos == [])
+    checar("derrubado: a conexao e' fechada", bool(conn.fechada))
+
+
 def teste_agente_tira_o_icone() -> None:
     """Regressao: cada bloqueio de tela deixava um icone morto na bandeja.
 
@@ -1127,6 +1216,9 @@ def teste_watchdog_devolve_comando() -> None:
     srv.ultimo_pong = {}
     srv.ao_mudar = lambda: None
     srv.controle = ctl
+    # o audio nao e' o assunto deste teste (ver teste_conexao_muda)
+    srv.audio_pedidos, srv._audio_enviado = {}, {}
+    srv._refazer_audio = lambda: None
 
     # Leva o cursor para C (encosta na borda direita) e trava o C.
     x0, y0, largura, altura = ew.geometria_virtual()
@@ -2770,6 +2862,7 @@ def main() -> int:
     teste_agente_tira_o_icone()
     teste_audio()
     teste_audio_roteamento()
+    teste_conexao_muda()
     teste_switch_externo_do_hyperv()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()
