@@ -17,9 +17,39 @@ import borda
 import clipboard_win
 import entrada_win as ew
 import layout as lay
+import politica as pol
 import protocolo
 
 log = logging.getLogger("servidor")
+
+
+def ip_na_mesma_subrede(ip: str) -> bool:
+    """O IP esta' numa das sub-redes (reais) desta maquina?"""
+    import redes
+    return redes.alcanca(ip) is not None
+
+
+def dns_reverso_confere(ip: str, nome: str, resolver=socket.gethostbyaddr,
+                        prazo: float = 3.0) -> bool:
+    """O DNS reverso do IP diz o mesmo nome que o PC se deu?
+
+    So' o primeiro rotulo conta ("pc-esq.casa.lan" vale "PC-esq"). O DNS reverso
+    pode demorar: roda numa thread com prazo, e sem resposta o IP NAO confere.
+    """
+    achado: list[str] = []
+
+    def buscar() -> None:
+        try:
+            achado.append(resolver(ip)[0])
+        except OSError:
+            pass
+
+    t = threading.Thread(target=buscar, name="dns-reverso", daemon=True)
+    t.start()
+    t.join(prazo)
+    if not achado:
+        return False
+    return achado[0].split(".")[0].strip().lower() == nome.strip().lower()
 
 FILA_MAXIMA = 2000  # eventos pendentes antes de comecar a descartar movimento
 INTERVALO_PING = 2.5
@@ -63,6 +93,70 @@ class Servidor:
         self._avisos: dict[str, float] = {}
         self.ultimo_erro = ""
         self.ao_mudar = lambda: None  # a interface liga aqui para atualizar o estado
+        # Regras da troca de PC e opcoes da sessao (politica.py). O servidor e'
+        # a fonte: os clientes recebem estas opcoes no `config` e em `opcoes`.
+        self.politica = pol.Politica.de_dict(cfg.get("opcoes"))
+        self.controle.politica = self.politica
+        self.controle.acao = self._pedir_acao
+        self.avisar = lambda texto: None  # a bandeja liga aqui (balao de aviso)
+
+    # -- opcoes e atalhos de acao -------------------------------------------
+
+    def aplicar_opcoes(self, d: dict) -> None:
+        """Muda as opcoes agora e as repassa aos clientes."""
+        self.politica.atualizar(d)
+        if self.sinc is not None:
+            self.sinc.compartilhar = self.politica.compartilhar_clipboard
+        self.difundir({"t": "opcoes", "opcoes": self.politica.para_clientes()})
+
+    def _pedir_acao(self, nome: str) -> None:
+        """Atalho apertado NESTE teclado. Vem de dentro do hook: so' enfileira."""
+        self._enfileirar(borda.LOCAL, {"t": "acao", "nome": nome})
+
+    def executar_acao(self, nome: str, origem: str = "") -> None:
+        """Roda uma acao de atalho. `origem` e' o PC cujo teclado a pediu."""
+        quem = f" (pedido por '{origem}')" if origem else ""
+        if nome == "alternar_troca":
+            ligada = not self.politica.troca_ligada
+            self.aplicar_opcoes({"troca_ligada": ligada})
+            texto = "Troca pela borda " + ("LIGADA" if ligada else "DESLIGADA")
+            log.info("%s%s", texto, quem)
+            self._avisar_bandeja(texto)
+        elif nome == "varias_maquinas":
+            if origem and origem != self.eu:
+                log.info("modo varios PCs so' pode ser ligado no teclado do servidor")
+                return
+            r = self.controle.alternar_multi()
+            if r is None:
+                self._avisar_bandeja("Modo varios PCs indisponivel agora")
+            else:
+                self._avisar_bandeja("Modo varios PCs " + ("LIGADO" if r else "desligado"))
+        elif nome == "reconectar":
+            self.atualizar_conexoes()
+            self._avisar_bandeja("Atualizando as conexoes")
+        elif nome == "bloquear_todos":
+            self.bloquear_todos()
+        else:
+            log.debug("acao de atalho desconhecida: %r", nome)
+
+    def atualizar_conexoes(self) -> None:
+        """Manda os clientes fecharem a conexao e reconectarem agora."""
+        log.info("atualizando as conexoes: os clientes vao reconectar")
+        self.difundir({"t": "reconectar"})
+
+    def bloquear_todos(self) -> None:
+        """Bloqueia a sessao de TODOS os PCs, este por ultimo."""
+        log.info("bloqueando todos os PCs")
+        self.difundir({"t": "bloquear"})
+        if not ew.bloquear_estacao():
+            log.warning("o Windows recusou bloquear este PC")
+
+    def _avisar_bandeja(self, texto: str) -> None:
+        if self.politica.avisos_na_bandeja:
+            try:
+                self.avisar(texto)
+            except Exception:
+                log.debug("falha ao avisar na bandeja", exc_info=True)
 
     # -- fila de eventos ----------------------------------------------------
 
@@ -226,6 +320,7 @@ class Servidor:
         threading.Thread(target=self._vigiar, name="watchdog", daemon=True).start()
         sinc = clipboard_win.Sincronizador(self.difundir, self.parar)
         sinc.start()
+        sinc.compartilhar = self.politica.compartilhar_clipboard
         self.sinc = sinc
         self.ouvir(self.cfg.get("ouvir") or [])  # o que a configuracao pede
 
@@ -256,6 +351,11 @@ class Servidor:
     # -- clientes -----------------------------------------------------------
 
     def _receber_cliente(self, sock: socket.socket, endereco) -> None:
+        if self.politica.so_mesma_subrede and not ip_na_mesma_subrede(endereco[0]):
+            log.warning("conexao de %s recusada: fora das sub-redes deste PC "
+                        "('so' a mesma sub-rede' esta' ligado)", endereco[0])
+            sock.close()
+            return
         try:
             conn, ola = protocolo.aceitar(
                 sock, self.cfg["chave"], {"papel": "servidor", "nome": self.eu})
@@ -294,10 +394,24 @@ class Servidor:
         if nome != anunciado:
             log.info("'%s' (%s) foi reconhecido pelo IP como '%s'; mandando o "
                      "layout deste servidor", anunciado, endereco[0], nome)
+        if (self.politica.validar_dns_reverso
+                and not dns_reverso_confere(endereco[0], nome)):
+            motivo = (f"o DNS reverso de {endereco[0]} nao diz '{nome}' ('validar "
+                      f"o IP pelo DNS reverso' esta' ligado no servidor)")
+            try:
+                conn.enviar({"t": "recusado", "motivo": motivo})
+            except Exception:
+                pass
+            self._avisar_uma_vez(f"dns:{nome}", "recusei '%s': %s", nome, motivo)
+            self.ultimo_erro = f"recusei '{nome}' ({endereco[0]}): DNS reverso"
+            self.ao_mudar()
+            conn.fechar()
+            return
         # O servidor e' a fonte unica do layout: o cliente adota o que vem daqui.
         try:
             conn.enviar({"t": "config", "seu_nome": nome, "servidor": self.eu,
-                         "layout": self.layout.para_config()})
+                         "layout": self.layout.para_config(),
+                         "opcoes": self.politica.para_clientes()})
         except Exception as exc:
             log.warning("nao consegui mandar o layout para '%s': %s", nome, exc)
             conn.fechar()
@@ -312,6 +426,7 @@ class Servidor:
         if antiga is not None:
             antiga.fechar()  # reconexao: derruba a sessao velha
         self.controle.conectados.add(nome)
+        self.controle.cliente_novo(nome)  # no modo varios PCs, entra nele tambem
         self._refazer_audio()
         telas = ola.get("monitores") or []
         log.info("'%s' conectado de %s (tela %s, %d monitor(es)%s)", nome,
@@ -355,13 +470,20 @@ class Servidor:
         self.ultimo_pong[nome] = time.monotonic()
         tipo = msg.get("t")
         if tipo == "sair":
-            self.controle.saiu_do_cliente(nome, msg["dir"], msg["rel"])
+            self.controle.saiu_do_cliente(nome, msg["dir"], msg["rel"],
+                                          bool(msg.get("cheia")),
+                                          str(msg.get("exe") or ""))
             self.ao_mudar()
         elif tipo == "assumir":
             # O cliente tem teclado e mouse proprios e encostou o cursor dele
             # numa borda: quer comandar o vizinho daquele lado.
-            self.controle.pedir_comando(nome, msg["dir"], msg["rel"])
+            self.controle.pedir_comando(nome, msg["dir"], msg["rel"],
+                                        bool(msg.get("cheia")),
+                                        str(msg.get("exe") or ""),
+                                        msg.get("mods") or ())
             self.ao_mudar()
+        elif tipo == "atalho":
+            self.executar_acao(str(msg.get("acao") or ""), nome)
         elif tipo == "in":
             self.controle.do_comandante(nome, msg.get("ev") or {})
         elif tipo == "largar":
@@ -373,6 +495,8 @@ class Servidor:
             self.controle.largar(f"panico no teclado de '{nome}'")
             self.ao_mudar()
         elif tipo == "clip":
+            if not self.politica.compartilhar_clipboard:
+                return  # area de transferencia desligada: nem aplica nem repassa
             if self.sinc is not None:
                 self.sinc.aplicar(msg)
             self.difundir(msg, excluir=nome)  # repassa aos demais
@@ -380,6 +504,8 @@ class Servidor:
             # Transferencia de arquivo: sao muitas mensagens e o clipboard so' e'
             # tocado na ultima. O repasse aos demais mantem o comportamento do
             # clipboard comum -- quem esta' na sala inteira recebe.
+            if not self.politica.compartilhar_clipboard:
+                return
             if self.sinc is not None:
                 self.sinc.aplicar_arquivo(msg)
             self.difundir(msg, excluir=nome)
@@ -432,7 +558,9 @@ class Servidor:
         desinstala o hook em silencio se o callback demorar.
         """
         tipo = ev.get("t")
-        if tipo == "soltar_local":
+        if tipo == "acao":
+            self.executar_acao(ev["nome"])
+        elif tipo == "soltar_local":
             self.injetor.soltar_modificadores()
         elif tipo == "por_cursor":
             # Este PC e' o alvo: quem comanda e' o teclado de outra maquina.

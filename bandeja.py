@@ -8,8 +8,10 @@ import threading
 
 log = logging.getLogger("bandeja")
 
-VERDE = (47, 107, 63)
-CINZA = (110, 116, 126)
+VERDE = (47, 107, 63)       # no ar e conectado
+CINZA = (110, 116, 126)      # parado
+AMARELO = (196, 146, 24)     # no ar, mas sem ninguem do outro lado
+VERMELHO = (178, 54, 54)     # no ar com erro (recusado, sem servidor, injecao)
 
 
 def _imagem(cor) -> "object":
@@ -30,6 +32,60 @@ def _imagem(cor) -> "object":
 # icone -- visto no log do PC da esquerda: "string too long (130, maximum
 # length 128)", quando o Explorer reiniciou. O icone some da bandeja.
 LIMITE_DA_DICA = 127
+
+
+def cor_do_estado(motor) -> tuple:
+    """Verde conectado, amarelo esperando, vermelho com erro, cinza parado."""
+    try:
+        if not motor.ativo() or motor.papel is None:
+            return CINZA
+        s = motor.papel.situacao()
+        if s.get("erro"):
+            return VERMELHO
+        return VERDE if s.get("conectados") else AMARELO
+    except Exception:
+        return CINZA
+
+
+def _aviso_de_conexao(antes, depois) -> str:
+    """Texto do balao quando a conexao muda; "" quando nao ha' o que dizer.
+
+    So' o que importa ao usuario: conectou, ou estava conectado e deixou de estar.
+    Parar e abrir o programa (cinza) nao e' queda.
+    """
+    if antes is None:
+        return ""  # primeira leitura: nao e' uma mudanca
+    if depois == VERDE:
+        return "Conectado"
+    if antes == VERDE and depois in (AMARELO, VERMELHO):
+        return "Conexao perdida"
+    return ""
+
+
+def _avisos_ligados(motor) -> bool:
+    papel = getattr(motor, "papel", None)
+    politica = getattr(papel, "politica", None)
+    return True if politica is None else bool(politica.avisos_na_bandeja)
+
+
+def _troca_ligada(motor) -> bool:
+    papel = getattr(motor, "papel", None)
+    if papel is not None and getattr(papel, "politica", None) is not None:
+        return papel.politica.troca_ligada
+    return bool((getattr(motor, "cfg", None) or {}).get("opcoes", {})
+                .get("troca_ligada", True))
+
+
+def _alternar_troca(motor) -> None:
+    """Liga/desliga a troca pela borda. Grava no config: o agente (outro
+    processo) e a janela leem de la'."""
+    import configuracao as conf
+    novo = not _troca_ligada(motor)
+    motor.opcoes({"troca_ligada": novo})
+    try:
+        conf.gravar_chave("opcoes", dict(motor.cfg.get("opcoes") or {}))
+    except OSError:
+        log.warning("nao consegui gravar as opcoes no config.json", exc_info=True)
 
 
 def dica_do_icone(motor) -> str:
@@ -112,6 +168,12 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
                                       default=True))
     itens.append(estado)
     if acoes:
+        itens.append(pystray.MenuItem(
+            "Troca pela borda (Ctrl+Alt+M)", lambda _i: _alternar_troca(motor),
+            checked=lambda _i: _troca_ligada(motor)))
+        itens.append(pystray.MenuItem(
+            "Atualizar conexoes (Ctrl+Alt+R)",
+            lambda _i: motor.atualizar_conexoes()))
         itens.append(pystray.MenuItem("Ouvir o audio de", pystray.Menu(
             lambda: _itens_de_audio(pystray, motor))))
     if acoes and ao_sair is not None:
@@ -119,14 +181,27 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
         itens.append(pystray.MenuItem(rotulo_sair, lambda: ao_sair()))
     icone.menu = pystray.Menu(*itens)
 
+    def avisar(texto: str) -> None:
+        """Balao de aviso do Windows. Nunca pode derrubar quem avisa."""
+        try:
+            icone.notify(texto, conf.APP)
+        except Exception:
+            log.debug("nao consegui mostrar o aviso na bandeja", exc_info=True)
+
+    if hasattr(motor, "aviso"):
+        motor.aviso = avisar
+
     def atualizar() -> None:
         pausa = threading.Event()  # thread daemon: morre com o processo
         anterior = None
         while not pausa.wait(2):
-            ativo = motor.ativo()
-            if ativo != anterior:
-                anterior = ativo
-                icone.icon = _imagem(VERDE if ativo else CINZA)
+            cor = cor_do_estado(motor)
+            if cor != anterior:
+                aviso_da_conexao = _aviso_de_conexao(anterior, cor)
+                anterior = cor
+                icone.icon = _imagem(cor)
+                if aviso_da_conexao and _avisos_ligados(motor):
+                    avisar(aviso_da_conexao)
             icone.title = dica_do_icone(motor)
 
     threading.Thread(target=icone.run, name="bandeja", daemon=True).start()

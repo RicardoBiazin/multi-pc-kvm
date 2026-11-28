@@ -109,25 +109,33 @@ class Layout:
     def servidor(self) -> PC | None:
         return next((p for p in self.pcs if p.servidor), None)
 
-    def vizinho(self, nome: str, direcao: str) -> PC | None:
-        """PC mais proximo daquele lado, na mesma linha (ou coluna)."""
+    def vizinho(self, nome: str, direcao: str, volta: bool = False) -> PC | None:
+        """PC mais proximo daquele lado, na mesma linha (ou coluna).
+
+        Com `volta`, quem esta' na ponta da fila encontra o outro extremo dela:
+        passar da borda do ultimo PC leva ao primeiro, e vice-versa (o "dar a
+        volta" do Mouse Without Borders). Fila de um PC so' nao da' volta.
+        """
         origem = self.por_nome(nome)
         if origem is None:
             return None
         dc, dl = DELTAS[direcao]
         if dl == 0:
-            candidatos = [p for p in self.pcs
-                          if p.linha == origem.linha
-                          and (p.coluna - origem.coluna) * dc > 0]
-            if not candidatos:
-                return None
-            return min(candidatos, key=lambda p: abs(p.coluna - origem.coluna))
-        candidatos = [p for p in self.pcs
-                      if p.coluna == origem.coluna
-                      and (p.linha - origem.linha) * dl > 0]
-        if not candidatos:
+            fila = [p for p in self.pcs if p.linha == origem.linha]
+            candidatos = [p for p in fila if (p.coluna - origem.coluna) * dc > 0]
+            if candidatos:
+                return min(candidatos, key=lambda p: abs(p.coluna - origem.coluna))
+            if volta and len(fila) > 1:
+                # sem ninguem adiante: o extremo OPOSTO da fila
+                return min(fila, key=lambda p: p.coluna * dc)
             return None
-        return min(candidatos, key=lambda p: abs(p.linha - origem.linha))
+        fila = [p for p in self.pcs if p.coluna == origem.coluna]
+        candidatos = [p for p in fila if (p.linha - origem.linha) * dl > 0]
+        if candidatos:
+            return min(candidatos, key=lambda p: abs(p.linha - origem.linha))
+        if volta and len(fila) > 1:
+            return min(fila, key=lambda p: p.linha * dl)
+        return None
 
 
 # -- geometria com varios monitores -----------------------------------------

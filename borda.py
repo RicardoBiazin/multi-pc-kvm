@@ -37,8 +37,13 @@ import time
 import alvo as alv
 import entrada_win as ew
 import layout as lay
+import politica as pol
 
 log = logging.getLogger("borda")
+
+# VKs de Shift e Ctrl, genericos e laterais: os eventos de tecla trazem os laterais.
+VKS_SHIFT = (0x10, 0xA0, 0xA1)
+VKS_CTRL = (0x11, 0xA2, 0xA3)
 
 TRAVA_APOS_RETORNO = 0.4  # s ignorando a borda, para nao reentrar em seguida
 MARGEM = 4  # px dentro da tela onde o cursor reaparece
@@ -89,6 +94,18 @@ class Controle:
         self._andado_da_retomada = 0
         self._liberado_em = 0.0
         self._engolidas: set[int] = set()
+        # Quando a troca pode acontecer (ver politica.py). O servidor troca por
+        # `atualizar` a partir do config e do que o usuario muda na tela.
+        self.politica = pol.Politica()
+        self.cheia_local = ew.app_em_tela_cheia  # (cheia, exe) deste PC
+        # Shift/Ctrl apertados no teclado de OUTRO PC que comanda: so' sabemos
+        # pelas teclas que chegam por `do_comandante`.
+        self._mods_remotos: set[str] = set()
+        # Atalhos de acao (Ctrl+Alt+M/K/R/L): quem executa e' o servidor.
+        self._atalhos = pol.Atalhos(time.monotonic)
+        self.acao = lambda nome: None
+        # Modo "varios PCs": a mesma entrada vai a todos ao mesmo tempo.
+        self.multi = False
 
     @property
     def remoto(self) -> bool:
@@ -184,6 +201,7 @@ class Controle:
         E' a saida de emergencia (panico, queda de cliente): depois dela o
         teclado e o mouse deste PC voltam a mandar, aconteca o que acontecer.
         """
+        self._sair_do_multi()
         self._retomar_comando(motivo, avisar=True)
         if not self.remoto:
             return
@@ -197,9 +215,79 @@ class Controle:
 
     # -- de quem e' o teclado e o mouse -------------------------------------
 
-    def pedir_comando(self, origem: str, direcao: str, rel: float) -> None:
+    # -- regras da troca (politica.py) --------------------------------------
+
+    def _vizinho(self, nome: str, direcao: str) -> lay.PC | None:
+        return self.layout.vizinho(nome, direcao, self.politica.dar_a_volta)
+
+    def _mods_agora(self) -> set[str]:
+        """Shift/Ctrl apertados no teclado de QUEM COMANDA."""
+        if self.comandante == self.eu:
+            return ew.modificadores_apertados()
+        return set(self._mods_remotos)
+
+    def _motivo_bloqueio(self, direcao: str, rel: float, cheia=None,
+                         exe: str = "", mods=None) -> str:
+        """"" se a troca pode acontecer. So' consulta o que a regra pede: ver a
+        janela em foco e o teclado custa uma chamada ao Windows."""
+        p = self.politica
+        if p.ignorar_tela_cheia and cheia is None:
+            cheia, exe = self.cheia_local()
+        if mods is None:
+            mods = self._mods_agora() if p.modificador != "nenhum" else frozenset()
+        motivo = p.decidir(direcao, rel, bool(cheia), exe or "", mods)
+        if not motivo and self.multi:
+            motivo = "modo varios PCs"
+        return motivo
+
+    def _lembrar_modificadores(self, ev: dict) -> None:
+        """Acompanha Shift/Ctrl do PC que comanda, pelas teclas que chegam."""
+        if ev.get("t") != "key":
+            return
+        vk = ev.get("vk")
+        nome = "shift" if vk in VKS_SHIFT else "ctrl" if vk in VKS_CTRL else ""
+        if nome:
+            (self._mods_remotos.add if ev.get("down")
+             else self._mods_remotos.discard)(nome)
+
+    # -- modo varios PCs -----------------------------------------------------
+
+    def alternar_multi(self) -> bool | None:
+        """Liga/desliga o envio da MESMA entrada a todos os PCs. None = nao deu."""
+        if self.multi:
+            self._sair_do_multi()
+            return False
+        if self.comandante != self.eu or self.remoto:
+            log.info("modo varios PCs: so' com o teclado e o cursor neste PC")
+            return None
+        if not self.conectados:
+            log.info("modo varios PCs: nenhum PC conectado")
+            return None
+        self.multi = True
+        # Cada cliente entra no modo remoto (cursor no centro), para injetar.
+        for nome in list(self.conectados):
+            self.enfileirar(nome, {"t": "entrar", "de": "centro", "rel": 0.5})
+        log.info("modo varios PCs LIGADO: a entrada daqui vai para %s tambem",
+                 ", ".join(sorted(self.conectados)))
+        return True
+
+    def _sair_do_multi(self) -> None:
+        if not self.multi:
+            return
+        self.multi = False
+        for nome in list(self.conectados):
+            self.enfileirar(nome, {"t": "soltar"})
+        log.info("modo varios PCs desligado")
+
+    def cliente_novo(self, nome: str) -> None:
+        """Um PC entrou com o modo varios PCs ligado: entra nele tambem."""
+        if self.multi:
+            self.enfileirar(nome, {"t": "entrar", "de": "centro", "rel": 0.5})
+
+    def pedir_comando(self, origem: str, direcao: str, rel: float, cheia=False,
+                      exe: str = "", mods=()) -> None:
         """Um cliente encostou o cursor DELE numa aresta e quer comandar o vizinho."""
-        vizinho = self.layout.vizinho(origem, direcao)
+        vizinho = self._vizinho(origem, direcao)
         if vizinho is None:
             self.enfileirar(origem, {"t": "comando", "ok": False,
                                      "motivo": "nao ha' PC desse lado no layout"})
@@ -207,6 +295,13 @@ class Controle:
         if vizinho.nome != self.eu and vizinho.nome not in self.conectados:
             self.enfileirar(origem, {"t": "comando", "ok": False,
                                      "motivo": f"{vizinho.nome} nao esta' conectado"})
+            return
+        motivo = self._motivo_bloqueio(direcao, rel, cheia, exe, set(mods))
+        if motivo:
+            # Sem texto: o cliente registraria "comando negado" a cada pedido, e
+            # o mouse encostado no canto pede de meio em meio segundo.
+            log.debug("troca de '%s' pela %s bloqueada: %s", origem, direcao, motivo)
+            self.enfileirar(origem, {"t": "comando", "ok": False, "motivo": ""})
             return
         if self.comandante != origem:
             anterior = self.comandante
@@ -249,6 +344,7 @@ class Controle:
         """Input que chegou pela rede, vindo do PC que esta' comandando."""
         if origem != self.comandante:
             return  # evento atrasado de quem ja' nao comanda
+        self._lembrar_modificadores(ev)
         if self.atual != self.eu:
             self.contar(self.atual, ev)
             self.enfileirar(self.atual, ev)  # so' repassa: o alvo e' outro
@@ -266,14 +362,21 @@ class Controle:
             self.enfileirar(LOCAL, {"t": "por_cursor", "x": x, "y": y})
             return
         direcao, rel = saida
-        vizinho = self.layout.vizinho(self.eu, direcao)
+        vizinho = self._vizinho(self.eu, direcao)
         if vizinho is None or (vizinho.nome != self.comandante
                                and vizinho.nome not in self.conectados):
             return  # nao ha' para onde ir: o cursor fica encostado
+        if self._motivo_bloqueio(direcao, rel, mods=self._mods_remotos):
+            return  # a regra da troca nao deixa: o cursor tambem fica encostado
         self._assumir(vizinho, lay.OPOSTA[direcao], rel)
 
-    def saiu_do_cliente(self, origem: str, direcao: str, rel: float) -> None:
+    def saiu_do_cliente(self, origem: str, direcao: str, rel: float,
+                        cheia=False, exe: str = "") -> None:
         """Um cliente avisou que o cursor passou de uma das arestas dele."""
+        if self.multi:
+            # Todos recebem a mesma entrada: o cursor de cada um nao sai.
+            self.enfileirar(origem, {"t": "entrar", "de": direcao, "rel": rel})
+            return
         if self.atual != origem:
             # Aviso atrasado de quem ja' nao tem o cursor. Sair daqui em SILENCIO
             # trava o cliente: ele para de injetar quando manda 'sair' e so'
@@ -288,11 +391,16 @@ class Controle:
                      "soltar", origem, self.atual)
             self.enfileirar(origem, {"t": "soltar"})
             return
-        vizinho = self.layout.vizinho(origem, direcao)
+        vizinho = self._vizinho(origem, direcao)
         chegada = lay.OPOSTA[direcao]
 
         if vizinho is None:
             # Nao ha' PC daquele lado: o cursor fica onde estava, encostado.
+            self.enfileirar(origem, {"t": "entrar", "de": direcao, "rel": rel})
+            return
+        motivo = self._motivo_bloqueio(direcao, rel, cheia, exe)
+        if motivo:
+            log.debug("saida de '%s' pela %s bloqueada: %s", origem, direcao, motivo)
             self.enfileirar(origem, {"t": "entrar", "de": direcao, "rel": rel})
             return
         if vizinho.nome == self.eu:
@@ -307,6 +415,9 @@ class Controle:
 
     def cliente_caiu(self, nome: str) -> None:
         self.conectados.discard(nome)
+        if self.multi and not self.conectados:
+            self.multi = False
+            log.info("modo varios PCs desligado: nao ha' mais PC conectado")
         if self.comandante == nome:
             # Quem comandava sumiu: sem isto o servidor ficaria esperando um
             # input que nao vem mais, com o teclado local ainda bloqueado.
@@ -325,6 +436,10 @@ class Controle:
         exige que o SetCursorPos tenha sido aplicado -- o que, chamado de dentro
         do proprio callback do hook, nao acontece de forma confiavel.
         """
+        if self.multi and self.comandante == self.eu and not self.remoto:
+            for nome in list(self.conectados):
+                self.enfileirar(nome, {"t": "mv", "dx": dx, "dy": dy})
+            return
         if not self.remoto or self.comandante != self.eu:
             return  # quem comanda e' outro: este mouse nao move o cursor de la'
         self.enfileirar(self.atual, {"t": "mv", "dx": dx, "dy": dy})
@@ -348,6 +463,11 @@ class Controle:
                 self._engolir(ev["vk"])
                 self.largar("atalho de panico")
                 return True
+            acao = self._acao_do_atalho(ev)
+            if acao is not None:
+                self._engolir(ev["vk"])
+                self.acao(acao)
+                return True
             destino = self._pc_do_atalho(ev)
             if destino is not None:
                 self._engolir(ev["vk"])
@@ -368,6 +488,15 @@ class Controle:
         if self.comandante != self.eu:
             if self._input_e_deliberado(ev):
                 self._comando_volta_por_input()
+            return False
+
+        if self.multi and not self.remoto:
+            # Modo varios PCs: este PC recebe a entrada normalmente (nada e'
+            # engolido) e os outros ganham uma copia.
+            if tipo in ("key", "btn", "whl"):
+                self.contar(self.eu, ev)
+                for nome in list(self.conectados):
+                    self.enfileirar(nome, ev)
             return False
 
         if tipo == "key":
@@ -441,11 +570,15 @@ class Controle:
         direcao = self._aresta_encostada(x, y)
         if direcao is None:
             return False
-        vizinho = self.layout.vizinho(self.eu, direcao)
+        vizinho = self._vizinho(self.eu, direcao)
         if vizinho is None or vizinho.nome not in self.conectados:
             return False
         rel = lay.relativo_na_aresta(x, y, direcao, self.x0, self.y0,
                                      self.largura, self.altura)
+        motivo = self._motivo_bloqueio(direcao, rel)
+        if motivo:
+            log.debug("troca pela %s bloqueada: %s", direcao, motivo)
+            return False
         self._assumir(vizinho, lay.OPOSTA[direcao], rel)
         return True
 
@@ -463,6 +596,16 @@ class Controle:
 
     def _engolir(self, vk: int) -> None:
         self._engolidas.add(vk)
+
+    def _acao_do_atalho(self, ev: dict) -> str | None:
+        """Ctrl+Alt+M/K/R/L: uma acao do servidor. None se nao e' atalho (ou se os
+        atalhos estao desligados)."""
+        if not self.politica.atalhos:
+            return None
+        return self._atalhos.detectar(
+            ev["vk"], ev["down"], ew.modificador_pressionado(ew.VK_CONTROL),
+            ew.modificador_pressionado(ew.VK_MENU),
+            ew.modificador_pressionado(ew.VK_SHIFT))
 
     def _pc_do_atalho(self, ev: dict) -> lay.PC | None:
         """Ctrl+Alt+1..9 leva o cursor direto para o N-esimo PC da lista.

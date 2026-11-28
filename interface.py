@@ -317,6 +317,17 @@ class Janela(tk.Tk):
         self.quadro_ouvir = ttk.Frame(baixo)
         self.quadro_ouvir.grid(row=1, column=0, columnspan=8, sticky="w",
                                pady=(6, 0))
+        # Regras da troca de PC e atualizacao das conexoes.
+        mais = ttk.Frame(baixo)
+        mais.grid(row=2, column=0, columnspan=8, sticky="w", pady=(6, 0))
+        ttk.Button(mais, text="Opcoes da troca de PC...",
+                   command=self._abrir_opcoes).grid(row=0, column=0)
+        ttk.Button(mais, text="Atualizar conexoes",
+                   command=self._atualizar_conexoes).grid(row=0, column=1, padx=8)
+        ttk.Label(mais, text="Ctrl+Alt+M liga/desliga a troca  |  Ctrl+Alt+K "
+                             "teclado em todos os PCs  |  Ctrl+Alt+L (2x) bloqueia "
+                             "todos  |  Ctrl+Alt+R atualiza as conexoes").grid(
+            row=0, column=2, padx=8)
         self.var_ouvir: dict[str, tk.BooleanVar] = {}
         self.var_ouvir_todos = tk.BooleanVar()
         self.var_volume = tk.IntVar(value=int(self.cfg.get("volume_audio", 100)))
@@ -538,6 +549,127 @@ class Janela(tk.Tk):
         ttk.Scale(self.quadro_ouvir, from_=0, to=100, variable=self.var_volume,
                   length=110, command=lambda _v: self._mudou_volume()
                   ).grid(row=0, column=coluna + 1)
+
+    def _atualizar_conexoes(self) -> None:
+        if not self.motor.ativo():
+            self._avisar("o programa nao esta' no ar nesta janela; quem mantem a "
+                         "conexao e' o inicio automatico (use Ctrl+Alt+R ou o "
+                         "menu do icone da bandeja)")
+            return
+        self.motor.atualizar_conexoes()
+        self._avisar("atualizando as conexoes")
+
+    # -- opcoes da troca de PC (politica.py) ---------------------------------
+
+    OPCOES_DE_MARCAR = (
+        ("troca_ligada", "Troca pela borda ligada (Ctrl+Alt+M)", True),
+        ("bloquear_cantos", "Bloquear os cantos da tela (nao troca de PC "
+                            "encostando num canto)", True),
+        ("dar_a_volta", "Dar a volta: a borda do ultimo PC leva ao primeiro", True),
+        ("bloquear_protetor", "Bloquear o protetor de tela nos outros PCs", True),
+        ("compartilhar_clipboard", "Compartilhar a area de transferencia "
+                                   "(texto, imagem e arquivos)", True),
+        ("atalhos", "Atalhos Ctrl+Alt+M / K / R / L", True),
+        ("avisos_na_bandeja", "Avisos na bandeja (troca ligada/desligada, modo "
+                              "varios PCs)", True),
+        ("so_mesma_subrede", "So' aceitar PCs da mesma sub-rede (seguranca)", True),
+        ("validar_dns_reverso", "Validar o IP pelo DNS reverso: o nome do PC "
+                                "precisa bater (seguranca)", True),
+    )
+    ROTULOS_DO_MODIFICADOR = {"nenhum": "nenhuma tecla (troca sempre)",
+                              "shift": "Shift apertado", "ctrl": "Ctrl apertado"}
+
+    def _abrir_opcoes(self) -> None:
+        import politica as pol
+        atual = getattr(self, "_dialogo_opcoes", None)
+        if atual is not None and atual.winfo_exists():
+            atual.lift()
+            return
+        eu = self._eu()
+        sou_servidor = bool(eu and eu.get("servidor"))
+        p = pol.Politica.de_dict(self.cfg.get("opcoes"))
+
+        d = tk.Toplevel(self)
+        self._dialogo_opcoes = d
+        d.title("Opcoes da troca de PC")
+        d.resizable(False, False)
+        d.transient(self)
+        corpo = ttk.Frame(d, padding=12)
+        corpo.grid(row=0, column=0)
+        linha = 0
+        if not sou_servidor:
+            ttk.Label(corpo, justify="left", foreground="#8a5a00", text=(
+                "Este PC e' cliente: as opcoes abaixo vem do SERVIDOR e valem "
+                "para todos.\nEdite-as la'. So' o cursor desenhado e' deste PC."
+            )).grid(row=linha, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            linha += 1
+
+        variaveis: dict[str, tk.Variable] = {}
+        estado = "normal" if sou_servidor else "disabled"
+        for chave, texto, _ in self.OPCOES_DE_MARCAR:
+            variaveis[chave] = tk.BooleanVar(value=bool(getattr(p, chave)))
+            ttk.Checkbutton(corpo, text=texto, variable=variaveis[chave],
+                            state=estado).grid(row=linha, column=0, columnspan=2,
+                                               sticky="w", pady=1)
+            linha += 1
+
+        ttk.Label(corpo, text="Trocar de PC so' com:").grid(
+            row=linha, column=0, sticky="w", pady=(8, 0))
+        var_mod = tk.StringVar(value=self.ROTULOS_DO_MODIFICADOR[p.modificador])
+        ttk.Combobox(corpo, textvariable=var_mod, state="disabled" if not sou_servidor
+                     else "readonly", width=30,
+                     values=list(self.ROTULOS_DO_MODIFICADOR.values())).grid(
+            row=linha, column=1, sticky="w", pady=(8, 0))
+        linha += 1
+
+        var_cheia = tk.BooleanVar(value=p.ignorar_tela_cheia)
+        ttk.Checkbutton(corpo, text="Nao trocar enquanto um programa esta' em "
+                                    "tela cheia", variable=var_cheia,
+                        state=estado).grid(row=linha, column=0, columnspan=2,
+                                           sticky="w", pady=(8, 1))
+        linha += 1
+        ttk.Label(corpo, text="Excecoes (.exe, separados por virgula):").grid(
+            row=linha, column=0, sticky="w")
+        var_lib = tk.StringVar(value=", ".join(p.liberados))
+        ttk.Entry(corpo, textvariable=var_lib, width=34, state=estado).grid(
+            row=linha, column=1, sticky="w")
+        linha += 1
+
+        var_cursor = tk.BooleanVar(value=p.desenhar_cursor)
+        ttk.Checkbutton(corpo, text="Desenhar o cursor neste PC se ele nao tiver "
+                                    "mouse", variable=var_cursor).grid(
+            row=linha, column=0, columnspan=2, sticky="w", pady=(8, 1))
+        linha += 1
+
+        def salvar() -> None:
+            novas = {chave: bool(v.get()) for chave, v in variaveis.items()}
+            rotulo = var_mod.get()
+            novas["modificador"] = next(
+                (k for k, v in self.ROTULOS_DO_MODIFICADOR.items() if v == rotulo),
+                "nenhum")
+            novas["ignorar_tela_cheia"] = bool(var_cheia.get())
+            novas["liberados"] = var_lib.get()
+            novas["desenhar_cursor"] = bool(var_cursor.get())
+            if not sou_servidor:
+                # Cliente: so' o que e' dele. O resto vem do servidor.
+                novas = {"desenhar_cursor": novas["desenhar_cursor"]}
+            final = pol.Politica.de_dict({**(self.cfg.get("opcoes") or {}),
+                                          **novas}).para_dict()
+            self.cfg["opcoes"] = final
+            conf.gravar_chave("opcoes", final)
+            self.motor.opcoes(final)
+            self._avisar("opcoes da troca de PC salvas")
+            d.destroy()
+
+        botoes = ttk.Frame(corpo)
+        botoes.grid(row=linha, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(botoes, text="Cancelar", command=d.destroy).grid(row=0, column=0,
+                                                                    padx=4)
+        ttk.Button(botoes, text="Salvar", command=salvar).grid(row=0, column=1)
+        try:
+            d.grab_set()
+        except tk.TclError:
+            pass  # janela ainda nao visivel: o dialogo funciona sem o travamento
 
     def _ouvir_todos(self) -> None:
         for var in self.var_ouvir.values():

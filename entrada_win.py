@@ -389,6 +389,146 @@ def modificador_pressionado(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
 
+def modificadores_apertados() -> set[str]:
+    """{"shift", "ctrl"} conforme o que esta' apertado neste teclado AGORA."""
+    achados = set()
+    if modificador_pressionado(VK_SHIFT):
+        achados.add("shift")
+    if modificador_pressionado(VK_CONTROL):
+        achados.add("ctrl")
+    return achados
+
+
+# -- aplicativo em tela cheia ----------------------------------------------
+
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+user32.MonitorFromWindow.restype = wintypes.HMONITOR
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
+                                            ctypes.POINTER(wintypes.DWORD)]
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+    ctypes.POINTER(wintypes.DWORD)]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+MONITOR_DEFAULTTONEAREST = 2
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# Janelas do proprio Windows que cobrem a tela inteira sem serem "um app em tela
+# cheia": a area de trabalho e a barra de tarefas.
+CLASSES_DA_SHELL = ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd")
+
+
+def _exe_do_processo(pid: int) -> str:
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        tamanho = wintypes.DWORD(len(buf))
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(tamanho)):
+            return buf.value.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    finally:
+        kernel32.CloseHandle(h)
+    return ""
+
+
+def app_em_tela_cheia() -> tuple[bool, str]:
+    """(esta' em tela cheia, nome do .exe em minusculas) da janela em foco.
+
+    "Tela cheia" e' cobrir o monitor INTEIRO, barra de tarefas incluida: uma
+    janela so' maximizada deixa a barra de fora e nao conta.
+    """
+    try:
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False, ""
+        classe = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, classe, 256)
+        if classe.value in CLASSES_DA_SHELL:
+            return False, ""
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False, ""
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        monitor = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return False, ""
+        m = info.rcMonitor
+        cheia = (rect.left <= m.left and rect.top <= m.top
+                 and rect.right >= m.right and rect.bottom >= m.bottom)
+        if not cheia:
+            return False, ""
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return True, _exe_do_processo(pid.value)
+    except Exception:
+        log.debug("nao consegui ver a janela em foco", exc_info=True)
+        return False, ""
+
+
+# -- tela acordada e bloqueio ------------------------------------------------
+
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+kernel32.SetThreadExecutionState.argtypes = [wintypes.DWORD]
+kernel32.SetThreadExecutionState.restype = wintypes.DWORD
+
+
+class ManterAcordado:
+    """Impede o protetor de tela e o desligamento do monitor enquanto estiver no ar.
+
+    O estado de energia pedido por `SetThreadExecutionState` vale para a THREAD
+    que o pediu e some quando ela termina; por isso existe uma thread propria,
+    que fica parada ate' `desligar`.
+    """
+
+    def __init__(self):
+        self._parar = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def ligado(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def ligar(self) -> None:
+        if self.ligado:
+            return
+        self._parar.clear()
+        self._thread = threading.Thread(target=self._segurar, name="tela-acordada",
+                                        daemon=True)
+        self._thread.start()
+
+    def desligar(self) -> None:
+        self._parar.set()
+        t, self._thread = self._thread, None
+        if t is not None:
+            t.join(timeout=2)
+
+    def _segurar(self) -> None:
+        try:
+            kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED
+                                             | ES_SYSTEM_REQUIRED)
+            while not self._parar.wait(30):
+                # Renovado de tempos em tempos: barato, e cobre o caso de algo
+                # ter zerado o estado.
+                kernel32.SetThreadExecutionState(ES_CONTINUOUS
+                                                 | ES_DISPLAY_REQUIRED
+                                                 | ES_SYSTEM_REQUIRED)
+        finally:
+            kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+
+def bloquear_estacao() -> bool:
+    """Bloqueia a sessao (como Win+L). True se o Windows aceitou o pedido."""
+    return bool(user32.LockWorkStation())
+
+
 def injecao_funciona() -> tuple[bool, str]:
     """Confere se SendInput realmente move o cursor desta maquina.
 

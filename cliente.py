@@ -27,12 +27,19 @@ import alvo as alv
 import audio
 import clipboard_win
 import configuracao as conf
+import cursor_virtual
 import descoberta
 import entrada_win as ew
 import layout as lay
+import politica as pol
 import protocolo
 
 log = logging.getLogger("cliente")
+
+# Para a pre-checagem que o cliente faz da regra de troca: quem sabe se Shift/Ctrl
+# estao apertados e' o teclado de quem COMANDA, nao este PC. Aqui a regra do
+# modificador e' dada como cumprida e o servidor decide de fato.
+TODOS_OS_MODIFICADORES = frozenset({"shift", "ctrl"})
 
 ESPERA_RECONEXAO = 3.0
 ESPERA_APOS_RECUSA = 15.0  # o servidor recusou por configuracao: insistir nao adianta
@@ -89,6 +96,33 @@ class Cliente:
         self._ouvir = sorted(set(cfg.get("ouvir") or []))
         self._sinal = time.monotonic()  # ultima vez que o servidor deu sinal
         self._aplicando = False
+        # Opcoes da sessao: nascem do config e passam a ser as do servidor assim
+        # que ele as manda (no `config`, e depois em `opcoes`).
+        self.politica = pol.Politica.de_dict(cfg.get("opcoes"))
+        self.acordado = ew.ManterAcordado()
+        self.cursor = cursor_virtual.CursorVirtual()  # so' abre janela se for usado
+        self._sinc = None
+        self._conn = None
+        self.avisar = lambda texto: None  # a bandeja liga aqui (balao de aviso)
+
+    def aplicar_opcoes(self, d: dict | None) -> None:
+        """Adota as opcoes do servidor e aplica o que tem efeito aqui."""
+        if not d:
+            return
+        self.politica.atualizar(d)
+        if self._sinc is not None:
+            self._sinc.compartilhar = self.politica.compartilhar_clipboard
+        if self.conectado and self.politica.bloquear_protetor:
+            self.acordado.ligar()
+        else:
+            self.acordado.desligar()
+
+    def reconectar(self) -> None:
+        """Fecha a conexao agora; o laco reconecta em segundos."""
+        conn = self._conn
+        if conn is not None:
+            log.info("reconexao pedida: fechando a conexao com o servidor")
+            conn.fechar("reconexao pedida")
 
     def ouvir(self, fontes) -> None:
         """Muda de quais PCs se toca o som. O servidor repassa o pedido a elas."""
@@ -152,6 +186,8 @@ class Cliente:
             # instalacao antiga no lugar e o input passaria por dois conjuntos.
             self.comando.parar()
             self.audio.parar()
+            self.cursor.parar()
+            self.acordado.desligar()
 
     def _laco(self) -> None:
         while not self.parar.is_set():
@@ -259,7 +295,11 @@ class Cliente:
         """Devolve quantos segundos esperar antes de tentar de novo."""
         fim = threading.Event()
         sinc = clipboard_win.Sincronizador(conn.enviar, fim)
+        sinc.compartilhar = self.politica.compartilhar_clipboard
+        self._sinc, self._conn = sinc, conn
         sinc.start()
+        if self.politica.bloquear_protetor:
+            self.acordado.ligar()
         # O servidor nao guarda o pedido de audio de uma conexao que caiu.
         self.audio.ouvir(self._ouvir)
         if self._ouvir:
@@ -296,6 +336,8 @@ class Cliente:
             # bloqueado e sem a rede ele nunca mais seria liberado.
             self.comando.largar("a conexao com o servidor caiu")
             self.audio.enviar_para([])  # sem o servidor ninguem pede o nosso som
+            self.acordado.desligar()  # a tela volta a poder apagar
+            self._sinc, self._conn = None, None
             self._encerrar_remoto()
             fim.set()
             conn.fechar()
@@ -360,6 +402,19 @@ class Cliente:
             raise Recusado(msg.get("motivo", "sem motivo informado"))
         if tipo == "config":
             self._adotar_layout(msg)
+            self.aplicar_opcoes(msg.get("opcoes"))
+            return
+        if tipo == "opcoes":
+            self.aplicar_opcoes(msg.get("opcoes"))
+            return
+        if tipo == "bloquear":
+            # Ctrl+Alt+L duas vezes no servidor: todos os PCs bloqueiam.
+            log.info("o servidor pediu para bloquear este PC")
+            if not ew.bloquear_estacao():
+                log.warning("o Windows recusou bloquear este PC")
+            return
+        if tipo == "reconectar":
+            conn.fechar("o servidor pediu para reconectar")
             return
         if tipo == "comando":
             # Resposta ao nosso 'assumir': o teclado e o mouse daqui passam (ou
@@ -374,7 +429,7 @@ class Cliente:
         if tipo == "entrar":
             self.aguardando = False
             x, y = self.alvo.entrar(msg["de"], msg["rel"])
-            self.injetor.mover_para(x, y)
+            self._mover(x, y)
             if not self.remoto:
                 self.remoto = True
                 log.info("controle recebido (entrou pela %s, cursor em %d,%d)",
@@ -396,21 +451,45 @@ class Cliente:
             saida = self.alvo.saida()
             if saida is not None:
                 direcao, rel = saida
+                cheia, exe = self._tela_cheia()
+                motivo = self.politica.decidir(direcao, rel, cheia, exe,
+                                               TODOS_OS_MODIFICADORES)
+                if motivo:
+                    # A regra da troca (canto, tela cheia, troca desligada) ja'
+                    # diz nao: o cursor fica encostado, sem ir ao servidor.
+                    x, y = self.alvo.entrar(direcao, rel)
+                    self._mover(x, y)
+                    return
                 # Nao encerramos aqui: quem decide se o cursor vai embora ou
                 # fica encostado e' o servidor, que responde com 'entrar' ou
                 # 'soltar'. Ate' la', so' paramos de injetar movimento.
                 self.aguardando = True
                 self._esperando_desde = time.monotonic()
-                conn.enviar({"t": "sair", "dir": direcao, "rel": rel})
+                msg_sair = {"t": "sair", "dir": direcao, "rel": rel}
+                if cheia:
+                    msg_sair.update(cheia=True, exe=exe)
+                conn.enviar(msg_sair)
                 log.info("cursor saiu pela %s; aguardando o servidor", direcao)
                 return
-            self.injetor.mover_para(*self.alvo.ponto())
+            self._mover(*self.alvo.ponto())
         elif tipo == "btn":
             self.injetor.botao(msg["b"], msg["down"])
         elif tipo == "whl":
             self.injetor.roda(msg["d"], msg["h"])
         elif tipo == "key":
             self.injetor.tecla(msg["vk"], msg["sc"], msg["ext"], msg["down"])
+
+    def _mover(self, x: int, y: int) -> None:
+        """Move o cursor deste PC e, se a opcao pede e nao ha' mouse, desenha-o."""
+        self.injetor.mover_para(x, y)
+        if self.politica.desenhar_cursor and cursor_virtual.sem_mouse():
+            self.cursor.mover(x, y)
+
+    def _tela_cheia(self) -> tuple[bool, str]:
+        """(cheia, exe) deste PC -- so' consulta o Windows se a regra pede."""
+        if not self.politica.ignorar_tela_cheia:
+            return False, ""
+        return ew.app_em_tela_cheia()
 
     def _desistiu_de_esperar(self) -> bool:
         """Passou de ESPERA_MAXIMA sem resposta ao 'sair': volta a injetar.
@@ -437,6 +516,7 @@ class Cliente:
         if not self.remoto:
             return
         self.remoto = False
+        self.cursor.ocultar()
         self.injetor.soltar_modificadores()
         log.info("controle devolvido")
         servidor = self.layout.servidor()
@@ -466,6 +546,7 @@ class ComandoLocal:
         self._liberado_em = 0.0
         self._pedido_em = 0.0
         self._engolidas: set[int] = set()
+        self._atalhos = pol.Atalhos(time.monotonic)
 
     def iniciar(self) -> None:
         if self.captura is not None:
@@ -503,6 +584,11 @@ class ComandoLocal:
             if ev["down"] and self._e_panico(ev):
                 self._engolidas.add(ev["vk"])
                 self._panico()
+                return True
+            acao = self._acao_do_atalho(ev)
+            if acao is not None:
+                self._engolidas.add(ev["vk"])
+                self._atalho(acao)
                 return True
             if ev["vk"] in self._engolidas:
                 # keyup da tecla cujo keydown viramos atalho: nao pode escapar
@@ -545,12 +631,25 @@ class ComandoLocal:
         direcao = lay.aresta_encostada(x, y, c.x0, c.y0, c.largura, c.altura)
         if direcao is None:
             return False
-        if c.layout.vizinho(c.eu, direcao) is None:
+        if c.layout.vizinho(c.eu, direcao, c.politica.dar_a_volta) is None:
             return False  # nao ha' PC desse lado: borda comum, deixa passar
         rel = lay.relativo_na_aresta(x, y, direcao, c.x0, c.y0, c.largura,
                                      c.altura)
+        # A regra da troca vale ANTES de pedir: o mouse encostado num canto
+        # bloqueado pediria de meio em meio segundo, sem fim. Quem tem o teclado
+        # e' este PC, entao Shift/Ctrl se confere aqui.
+        cheia, exe = c._tela_cheia()
+        mods = (ew.modificadores_apertados()
+                if c.politica.modificador != "nenhum" else set())
+        if c.politica.decidir(direcao, rel, cheia, exe, mods):
+            return False
         self._pedido_em = agora
-        c.enfileirar({"t": "assumir", "dir": direcao, "rel": rel})
+        pedido = {"t": "assumir", "dir": direcao, "rel": rel}
+        if cheia:
+            pedido.update(cheia=True, exe=exe)
+        if mods:
+            pedido["mods"] = sorted(mods)
+        c.enfileirar(pedido)
         # Nao engolimos: ate' o servidor conceder, o mouse continua sendo daqui.
         return False
 
@@ -601,6 +700,24 @@ class ComandoLocal:
         if estava:
             self.cliente.injetor.soltar_modificadores()
             self.cliente.ao_mudar()
+
+    # -- atalhos de acao (Ctrl+Alt+M/K/R/L) --------------------------------
+
+    def _acao_do_atalho(self, ev: dict) -> str | None:
+        if not self.cliente.politica.atalhos:
+            return None
+        return self._atalhos.detectar(
+            ev["vk"], ev["down"], ew.modificador_pressionado(ew.VK_CONTROL),
+            ew.modificador_pressionado(ew.VK_MENU),
+            ew.modificador_pressionado(ew.VK_SHIFT))
+
+    def _atalho(self, acao: str) -> None:
+        """Vem de dentro do hook: nada de rede aqui, so' enfileirar."""
+        if acao == "reconectar":
+            # So' a conexao DESTE PC; atualizar a de todos e' no servidor.
+            threading.Thread(target=self.cliente.reconectar, daemon=True).start()
+            return
+        self.cliente.enfileirar({"t": "atalho", "acao": acao})
 
     # -- panico -------------------------------------------------------------
 

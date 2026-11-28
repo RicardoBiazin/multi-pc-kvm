@@ -77,7 +77,7 @@ def conferir_o_proprio_pacote() -> str:
 
 
 MODULOS_DO_PROGRAMA = (
-    "alvo", "arquivos", "audio", "aviso", "bandeja", "borda", "cliente",
+    "alvo", "arquivos", "audio", "aviso", "bandeja", "borda", "cliente", "cursor_virtual", "politica",
     "clipboard_win", "configuracao", "contador", "descoberta", "diagnostico",
     "entrada_win", "interface", "layout", "motor", "protocolo", "redes",
     "relatorio", "servico", "servidor", "sessao_win", "tema",

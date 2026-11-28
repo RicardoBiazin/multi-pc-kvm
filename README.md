@@ -16,6 +16,14 @@ janela. Licença MIT.
 |---|---|
 | **Ctrl+Alt+1…9** | leva teclado e mouse direto para o N-ésimo PC da lista |
 | **Ctrl+Alt+Shift+Esc** | pânico: devolve tudo ao PC onde foi apertado |
+| **Ctrl+Alt+M** | liga/desliga a troca de PC pela borda (até reiniciar; o menu da bandeja grava) |
+| **Ctrl+Alt+K** | modo *vários PCs*: o que você digita e clica vale em todos ao mesmo tempo |
+| **Ctrl+Alt+L**, duas vezes | bloqueia a sessão de **todos** os PCs |
+| **Ctrl+Alt+R** | atualiza as conexões (fecha e reconecta; no servidor, todos os clientes) |
+
+Os quatro últimos funcionam em qualquer PC que tenha teclado ligado, e podem ser
+desligados em *Opções da troca de PC* (em teclados com AltGr, `Ctrl+Alt+letra`
+pode digitar um caractere).
 
 ## Tema claro e escuro
 
@@ -247,6 +255,34 @@ dia vai para `uso-historico.jsonl`. Gravar em disco não é capricho: com o iní
 automático ligado, o agente morre e nasce a cada bloqueio de tela, e contagem só
 na memória zeraria várias vezes por dia.
 
+## Opções da troca de PC
+
+O botão **Opções da troca de PC...** (e o menu do ícone da bandeja) controla
+*quando* o cursor pode trocar de PC. Quem decide é o **servidor**, e ele repassa
+as opções a todos os clientes; num cliente a janela mostra as opções como somente
+leitura (exceto o cursor desenhado, que é de cada PC).
+
+| Opção | O que faz |
+|---|---|
+| **Troca pela borda ligada** | desligada, encostar na borda não troca; só os atalhos `Ctrl+Alt+1…9` |
+| **Bloquear os cantos** | encostar num canto (4% da borda) não troca: evita passar de PC ao buscar o botão de fechar |
+| **Trocar só com Shift / Ctrl** | a borda só troca com a tecla apertada (o "Mouse Fácil" do PowerToys) |
+| **Não trocar em tela cheia** | enquanto um programa cobre o monitor inteiro (jogo, Área de Trabalho Remota, apresentação) a borda não troca; **exceções** por nome de `.exe` |
+| **Dar a volta** | passar da borda do último PC leva ao primeiro da fila |
+| **Bloquear o protetor de tela** | os clientes não apagam a tela nem abrem o protetor enquanto conectados |
+| **Compartilhar a área de transferência** | desligada, nada sai e nada é gravado (texto, imagem e arquivos) |
+| **Avisos na bandeja** | balão quando a troca liga/desliga, o modo vários PCs muda, ou a conexão cai/volta |
+| **Só aceitar PCs da mesma sub-rede** | o servidor recusa conexões vindas de fora das redes dele |
+| **Validar o IP pelo DNS reverso** | o DNS reverso do IP tem de dizer o nome do PC (sem DNS reverso na rede, ligar isto recusa todo mundo) |
+| **Desenhar o cursor** | num PC **sem mouse** o Windows não mostra o cursor; esta opção desenha uma setinha que acompanha a posição |
+
+A cor do ícone na bandeja mostra o estado: **cinza** parado, **amarelo** no ar sem
+ninguém do outro lado, **verde** conectado, **vermelho** com erro.
+
+O **modo vários PCs** (`Ctrl+Alt+K`) só liga com o cursor e o teclado no próprio
+servidor e pelo menos um PC conectado. Enquanto estiver ligado, a borda não troca
+de PC (todos já recebem tudo); desligue com o mesmo atalho, ou use o pânico.
+
 ## Ouvir o áudio de outro PC
 
 Na parte de baixo da janela, **Ouvir o áudio de:** tem uma caixa por PC (menos
@@ -371,6 +407,8 @@ Sem elevação o Windows bloqueia captura e injeção sobre janelas elevadas
 | `interface.py` | Janela tkinter: papel, lista de PCs, mapa arrastável, rede, log |
 | `descoberta.py` | Farol UDP: anuncia este PC e acha os outros na LAN |
 | `audio.py` | Áudio entre PCs: captura WASAPI, UDP cifrado (AES-GCM), saída por origem |
+| `politica.py` | Regras da troca de PC (cantos, Shift/Ctrl, tela cheia, ligar/desligar) e atalhos de ação |
+| `cursor_virtual.py` | Setinha desenhada por janela transparente, para PC sem mouse |
 | `redes.py` | Placas via `GetAdaptersAddresses`: IP, Wi-Fi/cabo, máscara, broadcast |
 | `diagnostico.py` | Teste de conexão e regras de Firewall |
 | `relatorio.py` | Relatório de diagnóstico em arquivo, para compartilhar |
@@ -495,8 +533,11 @@ condições.
   o relatório avisam quando isso acontece.
 - A busca na rede é por broadcast UDP: só enxerga PCs na **mesma sub-rede**.
   Entre VLANs ou por VPN, adicione os PCs à mão pelo IP.
-- Sem transferência de arquivos — só texto e imagem no clipboard.
+- Arquivos e pastas atravessam pela área de transferência (copiar num PC, colar no
+  outro), até **500 MB** por colagem. Não há arrastar e soltar entre os PCs.
 - Imagens acima de 8 MB (já em PNG) são descartadas.
+- O cursor desenhado (PC sem mouse) é uma janela transparente: não aparece sobre
+  telas seguras (UAC, Ctrl+Alt+Del) nem sobre alguns jogos em tela cheia exclusiva.
 - Em modo remoto o cursor do servidor fica parado e visível no meio do monitor
   principal.
 - Eventos de mouse *injetados* por outros programas não atravessam a borda

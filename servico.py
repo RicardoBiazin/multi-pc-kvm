@@ -629,6 +629,10 @@ def _reler_audio(m, visto: float) -> float:
         volume = int(cfg.get("volume_audio", 100))
         if volume != int(m.cfg.get("volume_audio", 100)):
             m.volume(volume / 100)
+        opcoes = dict(cfg.get("opcoes") or {})
+        if opcoes != dict(m.cfg.get("opcoes") or {}):
+            log.info("opcoes da troca de PC mudaram no config.json; aplicando")
+            m.opcoes(opcoes)
     except Exception:
         log.debug("nao consegui reler o audio do config.json", exc_info=True)
     return agora

@@ -396,6 +396,10 @@ class Sincronizador(threading.Thread):
         self._lock = threading.Lock()
         self._recepcao = arquivos.Recepcao()
         self._falhas = 0  # ciclos que morreram na excecao, para o log ralear
+        # Opcao "compartilhar area de transferencia". Desligada, nada sai deste
+        # PC e nada que chega e' gravado nele -- a thread continua de pe', para
+        # religar sem reconectar.
+        self.compartilhar = True
 
     def aplicar_arquivo(self, msg: dict) -> None:
         """Consome uma mensagem 'arq'. Ao completar, poe os arquivos no clipboard.
@@ -404,6 +408,8 @@ class Sincronizador(threading.Thread):
         clipboard so' e' tocado na ultima -- antes disso nao ha' arquivo inteiro
         para colar.
         """
+        if not self.compartilhar:
+            return
         prontos = self._recepcao.aplicar(msg)
         if prontos is None:
             return
@@ -411,6 +417,8 @@ class Sincronizador(threading.Thread):
                       "caminhos": [str(c) for c in prontos]})
 
     def aplicar(self, msg: dict) -> None:
+        if not self.compartilhar:
+            return
         # O lock fica preso durante toda a escrita: se o poller rodasse no meio,
         # veria o conteudo novo e o devolveria ao outro PC (eco).
         with self._lock:
@@ -511,6 +519,11 @@ class Sincronizador(threading.Thread):
         while not self.parar.wait(INTERVALO):
             try:
                 sequencia = wcb.GetClipboardSequenceNumber()
+                if not self.compartilhar:
+                    # So' acompanha: o que for copiado agora nao sai, e nao sai
+                    # tambem quando o compartilhamento voltar.
+                    self._sequencia = sequencia
+                    continue
                 with self._lock:
                     if sequencia == self._sequencia:
                         continue

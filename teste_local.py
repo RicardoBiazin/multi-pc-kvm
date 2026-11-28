@@ -31,6 +31,7 @@ import configuracao as conf
 import diagnostico
 import entrada_win as ew
 import layout as lay
+import politica as pol
 import tema as tm
 
 falhas: list[str] = []
@@ -55,6 +56,9 @@ def cliente_falso(enviados: list, injetado: list) -> "cliente.Cliente":
                              lay.PC("esq", "2", 1, 1)])
     cli.fila = None
     cli.enfileirar = lambda ev: enviados.append(ev)
+    cli.politica = pol.Politica()  # sem regra nenhuma: troca livre, como antes
+    cli.cursor = type("C", (), {"mover": lambda s, x, y: None, "ocultar": lambda s: None,
+                                 "parar": lambda s: None})()
     cli.comando = cliente.ComandoLocal(cli)
     cli.comando.ancora = (1280, 540)
     return cli
@@ -557,6 +561,443 @@ def teste_audio_roteamento() -> None:
            and tras.msgs[-1]["destinos"] == [["10.0.0.2", audio.PORTA]])
 
 
+def teste_politica_da_troca() -> None:
+    """As regras do Mouse sem Fronteiras: cantos, Shift/Ctrl, tela cheia, ligar
+    e desligar, dar a volta, atalhos de acao e o modo varios PCs."""
+    import servidor as srvmod
+    print("politica da troca de PC")
+
+    # -- a regra em si ---------------------------------------------------------
+    p = pol.Politica()
+    checar("padrao: troca livre", p.decidir("direita", 0.5) == "")
+    p.atualizar({"troca_ligada": False})
+    checar("troca desligada bloqueia", "desligada" in p.decidir("direita", 0.5))
+    p = pol.Politica.de_dict({"bloquear_cantos": True})
+    checar("canto de cima bloqueia", p.decidir("direita", 0.02) != "")
+    checar("canto de baixo bloqueia", p.decidir("direita", 0.97) != "")
+    checar("meio da borda passa", p.decidir("direita", 0.5) == "")
+    p = pol.Politica.de_dict({"modificador": "shift"})
+    checar("sem Shift apertado nao troca", p.decidir("direita", 0.5, mods=set()) != "")
+    checar("com Shift troca", p.decidir("direita", 0.5, mods={"shift"}) == "")
+    checar("Ctrl nao vale por Shift", p.decidir("direita", 0.5, mods={"ctrl"}) != "")
+    p = pol.Politica.de_dict({"ignorar_tela_cheia": True,
+                              "liberados": "MSTSC.exe; vmconnect.exe"})
+    checar("app em tela cheia bloqueia",
+           "tela cheia" in p.decidir("direita", 0.5, True, "jogo.exe"))
+    checar("lista de liberados aceita texto e ignora maiuscula",
+           p.decidir("direita", 0.5, True, "mstsc.exe") == "")
+    checar("sem tela cheia passa", p.decidir("direita", 0.5, False, "") == "")
+    p = pol.Politica.de_dict({"modificador": "alt", "compartilhar_clipboard": 0})
+    checar("modificador invalido vira 'nenhum'", p.modificador == "nenhum")
+    checar("o que vai aos clientes nao leva as opcoes so' do servidor",
+           "so_mesma_subrede" not in p.para_clientes()
+           and "desenhar_cursor" not in p.para_clientes()
+           and "bloquear_cantos" in p.para_clientes())
+
+    # -- atalhos de acao -------------------------------------------------------
+    t = [0.0]
+    a = pol.Atalhos(lambda: t[0])
+    M, L = 0x4D, 0x4C
+    checar("Ctrl+Alt+M liga/desliga a troca", a.detectar(M, True, True, True, False) == "alternar_troca")
+    checar("sem Alt nao e' atalho", a.detectar(M, True, True, False, False) is None)
+    checar("com Shift nao e' atalho (colide com o panico)",
+           a.detectar(M, True, True, True, True) is None)
+    checar("soltar a tecla nao dispara", a.detectar(M, False, True, True, False) is None)
+    checar("Ctrl+Alt+L uma vez nao bloqueia", a.detectar(L, True, True, True, False) is None)
+    t[0] = 1.0
+    checar("a segunda em 1,5 s bloqueia todos", a.detectar(L, True, True, True, False) == "bloquear_todos")
+    t[0] = 1.2
+    checar("e zera: a terceira e' uma primeira", a.detectar(L, True, True, True, False) is None)
+    t[0] = 9.0
+    checar("segunda tarde demais nao conta", a.detectar(L, True, True, True, False) is None)
+
+    # -- no controle do servidor ----------------------------------------------
+    borda.ew.mover_cursor = lambda x, y: None
+    modificadores_reais = borda.ew.modificadores_apertados
+    mod_real = borda.ew.modificador_pressionado
+    enviados: list = []
+    lo = lay.Layout([lay.PC("SRV", "2", 2, 1, True), lay.PC("ESQ", "1", 1, 1),
+                     lay.PC("DIR", "3", 3, 1)])
+
+    def novo(**opcoes):
+        enviados.clear()
+        c = borda.Controle(lo, "SRV", lambda d, m: enviados.append((d, m)))
+        c.conectados.update({"ESQ", "DIR"})
+        c.politica.atualizar(opcoes)
+        c.cheia_local = lambda: (False, "")
+        return c
+
+    def encosta(c, lado="esquerda", alto=0.5):
+        y = c.y0 + int(c.altura * alto)
+        x = c.x0 if lado == "esquerda" else c.x0 + c.largura - 1
+        return c.tratar({"t": "mv", "pos": (x, y)})
+
+    try:
+        c = novo()
+        encosta(c)
+        checar("sem regra: cruza como sempre", c.atual == "ESQ")
+        c = novo(bloquear_cantos=True)
+        r = encosta(c, alto=0.01)
+        checar("canto bloqueado: nao troca e o mouse segue livre",
+               c.atual == "SRV" and r is False)
+        encosta(c, alto=0.5)
+        checar("fora do canto, troca", c.atual == "ESQ")
+        c = novo(troca_ligada=False)
+        encosta(c)
+        checar("troca desligada: nao cruza", c.atual == "SRV")
+        c = novo(modificador="shift")
+        borda.ew.modificadores_apertados = lambda: set()
+        encosta(c)
+        checar("Mouse Facil: sem Shift nao cruza", c.atual == "SRV")
+        borda.ew.modificadores_apertados = lambda: {"shift"}
+        encosta(c)
+        checar("Mouse Facil: com Shift cruza", c.atual == "ESQ")
+        c = novo(ignorar_tela_cheia=True)
+        c.cheia_local = lambda: (True, "jogo.exe")
+        encosta(c)
+        checar("tela cheia: nao cruza", c.atual == "SRV")
+        c = novo(ignorar_tela_cheia=True, liberados=["jogo.exe"])
+        c.cheia_local = lambda: (True, "jogo.exe")
+        encosta(c)
+        checar("app liberado em tela cheia: cruza", c.atual == "ESQ")
+
+        # dar a volta: SRV esta' no meio; a ponta e' o DIR
+        c = novo()
+        encosta(c, "direita")
+        checar("sem volta, a borda do meio vai para o vizinho", c.atual == "DIR")
+        lo2 = lay.Layout([lay.PC("SRV", "2", 2, 1, True), lay.PC("ESQ", "1", 1, 1)])
+        c = borda.Controle(lo2, "SRV", lambda d, m: enviados.append((d, m)))
+        c.conectados.add("ESQ")
+        encosta(c, "direita")
+        checar("sem volta, a borda da ponta nao leva a lugar nenhum", c.atual == "SRV")
+        c.politica.atualizar({"dar_a_volta": True})
+        encosta(c, "direita")
+        checar("com volta, a ponta leva ao outro extremo da fila", c.atual == "ESQ")
+
+        # pedido de comando de um cliente
+        c = novo(bloquear_cantos=True)
+        c.pedir_comando("ESQ", "direita", 0.01)
+        checar("cliente pedindo no canto: negado, sem texto",
+               enviados == [("ESQ", {"t": "comando", "ok": False, "motivo": ""})],
+               str(enviados))
+        enviados.clear()
+        c.pedir_comando("ESQ", "direita", 0.5)
+        checar("cliente pedindo no meio: concedido",
+               ("ESQ", {"t": "comando", "ok": True}) in enviados)
+        c = novo(ignorar_tela_cheia=True)
+        c.pedir_comando("ESQ", "direita", 0.5, True, "jogo.exe")
+        checar("cliente com app em tela cheia: negado",
+               ("ESQ", {"t": "comando", "ok": False, "motivo": ""}) in enviados)
+
+        # saida de um cliente que tem o cursor
+        c = novo(bloquear_cantos=True)
+        c.atual = "ESQ"
+        enviados.clear()
+        c.saiu_do_cliente("ESQ", "direita", 0.01)
+        checar("saida pelo canto: o cliente recebe 'entrar' (fica encostado)",
+               enviados == [("ESQ", {"t": "entrar", "de": "direita", "rel": 0.01})],
+               str(enviados))
+
+        # atalho de acao: engolido e entregue a quem executa
+        borda.ew.modificador_pressionado = lambda vk: vk in (borda.ew.VK_CONTROL,
+                                                           borda.ew.VK_MENU)
+        c = novo()
+        acoes: list = []
+        c.acao = acoes.append
+        tecla = {"t": "key", "vk": 0x4D, "sc": 50, "ext": False, "down": True}
+        r1 = c.tratar(dict(tecla))
+        r2 = c.tratar({**tecla, "down": False})
+        checar("Ctrl+Alt+M: engolido e vira a acao",
+               r1 is True and acoes == ["alternar_troca"], str(acoes))
+        checar("o keyup do atalho tambem e' engolido", r2 is True)
+        c.politica.atualizar({"atalhos": False})
+        acoes.clear()
+        checar("com os atalhos desligados, passa para o programa",
+               c.tratar(dict(tecla)) is False and acoes == [])
+        borda.ew.modificador_pressionado = mod_real
+
+        # modo varios PCs
+        c = novo()
+        checar("liga o modo varios PCs", c.alternar_multi() is True)
+        checar("cada cliente entra no modo remoto",
+               {d for d, m in enviados if m["t"] == "entrar"} == {"ESQ", "DIR"})
+        enviados.clear()
+        r = c.tratar({"t": "key", "vk": 0x41, "sc": 30, "ext": False, "down": True})
+        checar("a tecla fica neste PC (nao e' engolida)", r is False)
+        checar("e vai copiada para todos os outros",
+               {d for d, m in enviados if m["t"] == "key"} == {"ESQ", "DIR"})
+        enviados.clear()
+        c.delta_bruto(5, -2)
+        checar("o movimento relativo tambem vai a todos",
+               sorted(d for d, m in enviados if m["t"] == "mv") == ["DIR", "ESQ"])
+        enviados.clear()
+        encosta(c)
+        checar("em modo varios PCs a borda nao troca", c.atual == "SRV")
+        c.saiu_do_cliente("ESQ", "esquerda", 0.5)
+        checar("e o cursor de cada cliente nao sai",
+               enviados == [("ESQ", {"t": "entrar", "de": "esquerda", "rel": 0.5})])
+        enviados.clear()
+        c.cliente_novo("DIR")
+        checar("PC que entra com o modo ligado tambem entra nele",
+               enviados == [("DIR", {"t": "entrar", "de": "centro", "rel": 0.5})])
+        enviados.clear()
+        checar("desliga", c.alternar_multi() is False)
+        checar("e solta todos os clientes",
+               {d for d, m in enviados if m["t"] == "soltar"} == {"ESQ", "DIR"})
+        c = novo()
+        c.conectados.clear()
+        checar("sem PC conectado, nao liga", c.alternar_multi() is None)
+        c = novo()
+        c.alternar_multi()
+        c.largar("teste")
+        checar("o panico tira do modo varios PCs", c.multi is False)
+        c = novo()
+        c.alternar_multi()
+        c.cliente_caiu("ESQ")
+        checar("com um cliente restante, continua", c.multi is True)
+        c.cliente_caiu("DIR")
+        checar("sem nenhum cliente, desliga", c.multi is False)
+    finally:
+        borda.ew.modificadores_apertados = modificadores_reais
+        borda.ew.modificador_pressionado = mod_real
+
+    # -- o servidor executa as acoes -------------------------------------------
+    srv = object.__new__(srvmod.Servidor)
+    srv.eu = "SRV"
+    srv.politica = pol.Politica()
+    srv.sinc = None
+    difundidos: list = []
+    srv.difundir = lambda msg, excluir="": difundidos.append(msg)
+    avisos: list = []
+    srv.avisar = avisos.append
+    srv.controle = borda.Controle(lo, "SRV", lambda d, m: None)
+    srv.controle.conectados.update({"ESQ"})
+    bloqueios: list = []
+    bloqueio_real = srvmod.ew.bloquear_estacao
+    srvmod.ew.bloquear_estacao = lambda: bloqueios.append(1) or True
+    try:
+        srv.executar_acao("alternar_troca")
+        checar("Ctrl+Alt+M desliga a troca e avisa os clientes",
+               srv.politica.troca_ligada is False
+               and difundidos[-1]["t"] == "opcoes"
+               and difundidos[-1]["opcoes"]["troca_ligada"] is False, str(difundidos))
+        checar("e mostra um aviso na bandeja", "DESLIGADA" in avisos[-1], str(avisos))
+        srv.executar_acao("alternar_troca", "ESQ")
+        checar("de novo, liga (pedido por um cliente)", srv.politica.troca_ligada is True)
+        difundidos.clear()
+        srv.executar_acao("reconectar")
+        checar("reconectar manda todos os clientes reconectarem",
+               difundidos == [{"t": "reconectar"}], str(difundidos))
+        srv.executar_acao("bloquear_todos")
+        checar("bloquear todos: manda aos clientes e bloqueia este PC por ultimo",
+               difundidos[-1] == {"t": "bloquear"} and bloqueios == [1])
+        srv.executar_acao("varias_maquinas", "ESQ")
+        checar("modo varios PCs so' pelo teclado do servidor",
+               srv.controle.multi is False)
+        srv.executar_acao("varias_maquinas")
+        checar("e liga pelo do servidor", srv.controle.multi is True)
+        srv.politica.atualizar({"avisos_na_bandeja": False})
+        avisos.clear()
+        srv.executar_acao("alternar_troca")
+        checar("avisos da bandeja desligaveis", avisos == [])
+    finally:
+        srvmod.ew.bloquear_estacao = bloqueio_real
+
+    # -- seguranca opcional ----------------------------------------------------
+    resolver_ok = lambda ip: ("pc-esq.casa.lan", [], [ip])
+    checar("DNS reverso confere pelo primeiro rotulo, sem maiuscula",
+           srvmod.dns_reverso_confere("10.0.0.1", "PC-esq", resolver_ok))
+    checar("DNS reverso de outro nome nao confere",
+           not srvmod.dns_reverso_confere("10.0.0.1", "PC-dir", resolver_ok))
+
+    def sem_dns(ip):
+        raise OSError("sem reverso")
+
+    checar("sem DNS reverso, nao confere",
+           not srvmod.dns_reverso_confere("10.0.0.1", "PC-esq", sem_dns))
+
+    def lento(ip):
+        time.sleep(1.0)
+        return ("pc-esq", [], [ip])
+
+    t0 = time.monotonic()
+    checar("DNS lento estoura o prazo e nao confere",
+           not srvmod.dns_reverso_confere("10.0.0.1", "PC-esq", lento, prazo=0.2)
+           and time.monotonic() - t0 < 0.9)
+    checar("IP de fora das sub-redes nao e' da mesma sub-rede",
+           not srvmod.ip_na_mesma_subrede("8.8.8.8"))
+
+    # -- no cliente ------------------------------------------------------------
+    enviados.clear()
+    cli = cliente_falso(enviados, [])
+    cli.conectado = True
+    x, ycentro = cli.x0 + cli.largura - 1, cli.y0 + cli.altura // 2
+    cli.comando._pedido_em, cli.comando._liberado_em = 0.0, 0.0
+    cli.comando._talvez_pedir(x, ycentro)
+    checar("cliente pede o comando no meio da borda",
+           enviados and enviados[-1]["t"] == "assumir", str(enviados))
+    enviados.clear()
+    cli.comando._pedido_em = 0.0
+    cli.politica.atualizar({"bloquear_cantos": True})
+    cli.comando._talvez_pedir(x, cli.y0 + 2)
+    checar("cliente no canto bloqueado nem pede (sem repetir a cada 0,5 s)",
+           enviados == [], str(enviados))
+    cli.politica.atualizar({"bloquear_cantos": False, "modificador": "ctrl"})
+    mods_reais = cliente.ew.modificadores_apertados
+    cliente.ew.modificadores_apertados = lambda: set()
+    cli.comando._talvez_pedir(x, ycentro)
+    checar("cliente sem Ctrl apertado nao pede", enviados == [], str(enviados))
+    cliente.ew.modificadores_apertados = lambda: {"ctrl"}
+    cli.comando._pedido_em = 0.0
+    cli.comando._talvez_pedir(x, ycentro)
+    cliente.ew.modificadores_apertados = mods_reais
+    checar("com Ctrl apertado pede, e o pedido leva o teclado",
+           enviados and enviados[-1].get("mods") == ["ctrl"], str(enviados))
+
+    class ConnFalsa:
+        fechada = ""
+
+        def fechar(self, motivo=""):
+            ConnFalsa.fechada = motivo
+
+        def enviar(self, m):
+            pass
+
+    class SincFalso:
+        compartilhar = True
+
+    cli = cliente_falso([], [])
+    cli._sinc, cli.conectado = SincFalso(), True
+    cli.acordado = type("A", (), {"ligar": lambda s: None, "desligar": lambda s: None})()
+    cli.aplicar_opcoes({"compartilhar_clipboard": False})
+    checar("o cliente adota a opcao de area de transferencia do servidor",
+           cli._sinc.compartilhar is False and cli.politica.compartilhar_clipboard is False)
+    cli._aplicar(ConnFalsa(), None, {"t": "reconectar"})
+    checar("'reconectar' do servidor fecha a conexao", "reconectar" in ConnFalsa.fechada)
+    bloqueios.clear()
+    real = cliente.ew.bloquear_estacao
+    cliente.ew.bloquear_estacao = lambda: bloqueios.append(1) or True
+    try:
+        cli._aplicar(ConnFalsa(), None, {"t": "bloquear"})
+    finally:
+        cliente.ew.bloquear_estacao = real
+    checar("'bloquear' do servidor bloqueia este PC", bloqueios == [1])
+    cli._aplicar(ConnFalsa(), None, {"t": "opcoes", "opcoes": {"troca_ligada": False}})
+    checar("mensagem 'opcoes' atualiza a regra", cli.politica.troca_ligada is False)
+
+    # -- cursor desenhado em PC sem mouse --------------------------------------
+    import cursor_virtual as cv
+    desenhos: list = []
+    cli = cliente_falso([], [])
+    cli.injetor = type("I", (), {"mover_para": lambda s, x, y: None})()
+    cli.cursor = type("C", (), {"mover": lambda s, x, y: desenhos.append((x, y))})()
+    sem_mouse_real = cv.sem_mouse
+    try:
+        cv.sem_mouse = lambda: True
+        cli._mover(5, 6)
+        checar("opcao desligada: nada e' desenhado", desenhos == [])
+        cli.politica.atualizar({"desenhar_cursor": True})
+        cli._mover(7, 8)
+        checar("opcao ligada e PC sem mouse: desenha onde o cursor foi",
+               desenhos == [(7, 8)], str(desenhos))
+        cv.sem_mouse = lambda: False
+        cli._mover(9, 9)
+        checar("PC com mouse: o cursor de verdade basta", desenhos == [(7, 8)])
+    finally:
+        cv.sem_mouse = sem_mouse_real
+    pixels = cv.pixels_da_seta()
+    checar("a setinha tem o tamanho do bitmap (BGRA)",
+           len(pixels) == cv.LARGURA * cv.ALTURA * 4 and pixels[3] == 255
+           and pixels[7] == 0)
+    janela = cv.CursorVirtual()
+    try:
+        # A janela e' criada e atualizada SEM ser mostrada: o teste nao pode
+        # pintar nada na tela de quem o roda.
+        checar("a janela do cursor e' criada pelo Windows", janela._garantir())
+        checar("e o Windows aceita o desenho da setinha",
+               cv.CursorVirtual._desenhar(janela._hwnd, janela._hdc_mem, 10, 10))
+    finally:
+        janela.parar()
+    checar("e fecha limpa", not janela.funciona)
+
+
+def teste_icone_de_estado() -> None:
+    """A bandeja mostra o estado pela cor e liga/desliga a troca pelo menu."""
+    import bandeja
+    import motor as motormod
+    print("bandeja: cor do estado e troca pelo menu")
+
+    class Papel:
+        def __init__(self, situacao):
+            self._s = situacao
+            self.politica = pol.Politica()
+            self.aplicadas = []
+
+        def situacao(self):
+            return self._s
+
+        def aplicar_opcoes(self, d):
+            self.aplicadas.append(d)
+            self.politica.atualizar(d)
+
+    class M:
+        def __init__(self, ativo, papel=None):
+            self._ativo, self.papel, self.cfg = ativo, papel, {}
+
+        def ativo(self):
+            return self._ativo
+
+    checar("parado: cinza", bandeja.cor_do_estado(M(False)) == bandeja.CINZA)
+    checar("no ar sem ninguem do outro lado: amarelo",
+           bandeja.cor_do_estado(M(True, Papel({"conectados": []}))) == bandeja.AMARELO)
+    checar("conectado: verde",
+           bandeja.cor_do_estado(M(True, Papel({"conectados": ["ESQ"]}))) == bandeja.VERDE)
+    checar("com erro: vermelho",
+           bandeja.cor_do_estado(M(True, Papel({"conectados": [], "erro": "chave"})))
+           == bandeja.VERMELHO)
+
+    class Quebrado:
+        def ativo(self):
+            raise RuntimeError("x")
+
+    checar("estado ilegivel nao derruba o icone", bandeja.cor_do_estado(Quebrado()) == bandeja.CINZA)
+    av = bandeja._aviso_de_conexao
+    checar("conectou: avisa", av(bandeja.AMARELO, bandeja.VERDE) == "Conectado")
+    checar("caiu: avisa", av(bandeja.VERDE, bandeja.AMARELO) == "Conexao perdida")
+    checar("caiu com erro: avisa", av(bandeja.VERDE, bandeja.VERMELHO) == "Conexao perdida")
+    checar("parar o programa nao e' queda", av(bandeja.VERDE, bandeja.CINZA) == "")
+    checar("primeira leitura nao avisa", av(None, bandeja.VERDE) == "")
+    checar("esperar sem nunca ter conectado nao avisa",
+           av(bandeja.CINZA, bandeja.AMARELO) == "")
+
+    # a troca pelo menu: muda no motor e grava no config (o agente le' de la')
+    m = motormod.Motor({"este_pc": "A", "pcs": [], "chave": "k"})
+    m.papel = Papel({"conectados": ["ESQ"]})
+    m.thread = type("T", (), {"is_alive": lambda s: True})()
+    gravados: list = []
+    gravar_real = bandeja_conf = None
+    import configuracao as conf
+    gravar_real = conf.gravar_chave
+    conf.gravar_chave = lambda k, v: gravados.append((k, v))
+    try:
+        checar("troca comeca ligada", bandeja._troca_ligada(m) is True)
+        bandeja._alternar_troca(m)
+        checar("o menu desliga a troca no motor",
+               m.papel.aplicadas == [{"troca_ligada": False}]
+               and bandeja._troca_ligada(m) is False, str(m.papel.aplicadas))
+        checar("e grava no config",
+               gravados == [("opcoes", {"troca_ligada": False})], str(gravados))
+        bandeja._alternar_troca(m)
+        checar("o menu religa", bandeja._troca_ligada(m) is True)
+    finally:
+        conf.gravar_chave = gravar_real
+    avisos: list = []
+    m.aviso = avisos.append
+    m.papel.avisar = lambda t: m.aviso(t)
+    m.papel.avisar("teste")
+    checar("o aviso do papel chega ao balao da bandeja", avisos == ["teste"])
+
+
 def teste_conexao_muda() -> None:
     """Regressao: a conexao que morria em silencio deixava o PC 5 minutos sem
     passar o mouse (27/11/2026, 21:35 a 21:41). E o som seguia indo para o
@@ -604,9 +1045,9 @@ def teste_conexao_muda() -> None:
         c, conn, fim = cli(), Conn(), threading.Event()
         t = threading.Thread(target=c._vigiar_servidor, args=(conn, fim), daemon=True)
         t.start()
-        for _ in range(8):
+        for _ in range(16):  # renova a cada 0,1 s, dentro do limite de 0,2 s
             c._sinal = time.monotonic()
-            time.sleep(0.25)
+            time.sleep(0.1)
         checar("sinal em dia: nao fecha", not conn.fechada)
         fim.set(); t.join(3)
     finally:
@@ -2863,6 +3304,8 @@ def main() -> int:
     teste_audio()
     teste_audio_roteamento()
     teste_conexao_muda()
+    teste_politica_da_troca()
+    teste_icone_de_estado()
     teste_switch_externo_do_hyperv()
     teste_rede_mudou_de_ip()
     teste_espera_do_sair()

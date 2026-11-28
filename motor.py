@@ -88,6 +88,9 @@ class Motor:
         self.contador = None
         self.ao_mudar = lambda: None
         self.ao_trocar = lambda de, para: None
+        # Balao de aviso na bandeja ("Troca pela borda DESLIGADA"): quem tem o
+        # icone liga aqui.
+        self.aviso = lambda texto: None
 
     # -- consulta -----------------------------------------------------------
 
@@ -125,6 +128,24 @@ class Motor:
         self.cfg["ouvir"] = fontes
         if self.papel is not None and self.ativo():
             self.papel.ouvir(fontes)
+
+    def opcoes(self, novas: dict) -> None:
+        """Muda opcoes da sessao (politica.py). Vale ja' se o motor esta' no ar:
+        o servidor as repassa aos clientes."""
+        atuais = dict(self.cfg.get("opcoes") or {})
+        atuais.update(novas)
+        self.cfg["opcoes"] = atuais
+        if self.papel is not None and self.ativo():
+            self.papel.aplicar_opcoes(novas)
+
+    def atualizar_conexoes(self) -> None:
+        """Servidor: manda os clientes reconectarem. Cliente: reconecta este."""
+        if self.papel is None or not self.ativo():
+            return
+        if hasattr(self.papel, "atualizar_conexoes"):
+            self.papel.atualizar_conexoes()
+        else:
+            self.papel.reconectar()
 
     def volume(self, valor: float) -> None:
         self.cfg["volume_audio"] = int(round(valor * 100))
@@ -165,6 +186,7 @@ class Motor:
             cliente_novo.ao_trocar = self.ao_trocar
             self.papel = cliente_novo
         self.papel.ao_mudar = self.ao_mudar
+        self.papel.avisar = lambda texto: self.aviso(texto)
 
         self.thread = threading.Thread(target=self._rodar, name="motor",
                                        daemon=True)
