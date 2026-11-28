@@ -45,14 +45,19 @@ PADRAO = {
     "so_mesma_subrede": False,
     "validar_dns_reverso": False,
     "desenhar_cursor": False,
+    # "avisar": so' avisa que ha' versao nova; "automatica": instala sozinha num
+    # momento calmo; "desligada": nem consulta o GitHub. Ver atualizacao.py.
+    "atualizacao": "avisar",
 }
+
+MODOS_DE_ATUALIZACAO = ("avisar", "automatica", "desligada")
 
 # O que os clientes recebem do servidor: o que vale para a SESSAO. As duas
 # ultimas de seguranca valem so' no servidor, e `desenhar_cursor` e' de cada PC.
 DO_SERVIDOR = ("troca_ligada", "bloquear_cantos", "modificador",
                "ignorar_tela_cheia", "liberados", "dar_a_volta",
                "bloquear_protetor", "compartilhar_clipboard", "atalhos",
-               "avisos_na_bandeja")
+               "avisos_na_bandeja", "atualizacao")
 
 
 def _como(tipo_padrao, valor):
@@ -116,6 +121,7 @@ class Politica:
     so_mesma_subrede: bool = False
     validar_dns_reverso: bool = False
     desenhar_cursor: bool = False
+    atualizacao: str = "avisar"
 
     @classmethod
     def de_dict(cls, d: dict | None) -> "Politica":
@@ -130,6 +136,8 @@ class Politica:
                 setattr(self, chave, _como(padrao, d[chave]))
         if self.modificador not in MODIFICADORES:
             self.modificador = "nenhum"
+        if self.atualizacao not in MODOS_DE_ATUALIZACAO:
+            self.atualizacao = "avisar"
 
     def para_dict(self) -> dict:
         return {chave: getattr(self, chave) for chave in PADRAO}

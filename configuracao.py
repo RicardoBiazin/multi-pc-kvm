@@ -28,7 +28,7 @@ APP_ARQUIVO = "MultiPC-KVM"
 APP_ANTIGO = "2pc_1Kit"
 # Fonte unica da versao: janela, log, relatorio e o anuncio na rede leem daqui.
 # O `empacotar.py` tambem gera o versao.txt do executavel a partir dela.
-VERSAO = "2.6.1"
+VERSAO = "2.7.0"
 AUTOR = "Ricardo Biazin"
 LINKEDIN = "https://www.linkedin.com/in/ricardo-biazin/"
 
@@ -76,6 +76,93 @@ def caminho_config() -> pathlib.Path:
     if ao_lado.exists():
         return ao_lado
     return pasta_de_dados() / "config.json"
+
+
+# -- permissoes do config.json -----------------------------------------------
+#
+# O config guarda a CHAVE COMPARTILHADA, e ao lado do .exe ele herda as
+# permissoes da pasta: em `C:\Dev` (e no compartilhamento `Dev-esquerdo` que
+# aponta para ela) qualquer usuario do PC -- e da rede, conforme o
+# compartilhamento -- consegue le'-lo. Quem le' a chave entra na rede do KVM e
+# passa a injetar teclas e cliques. Quem precisa do arquivo e' so' o programa,
+# que roda como Administrador (a janela) ou SYSTEM (o inicio automatico).
+
+SID_SYSTEM = "S-1-5-18"
+SID_ADMINISTRADORES = "S-1-5-32-544"
+SIDS_PERMITIDOS = {SID_SYSTEM, SID_ADMINISTRADORES}
+# Usuarios, Todos, Usuarios autenticados: o que uma pasta comum concede.
+SIDS_LARGOS = ("S-1-5-32-545", "S-1-1-0", "S-1-5-11")
+
+
+def sids_com_acesso(caminho: pathlib.Path) -> set[str]:
+    """SIDs que a DACL do arquivo MENCIONA (concedendo ou negando)."""
+    import win32security
+    sd = win32security.GetFileSecurity(
+        str(caminho), win32security.DACL_SECURITY_INFORMATION)
+    dacl = sd.GetSecurityDescriptorDacl()
+    achados: set[str] = set()
+    if dacl is None:
+        return {"(sem DACL: acesso livre)"}
+    for i in range(dacl.GetAceCount()):
+        sid = dacl.GetAce(i)[2]
+        achados.add(win32security.ConvertSidToStringSid(sid))
+    return achados
+
+
+def proteger_arquivo(caminho: pathlib.Path) -> bool:
+    """Deixa o arquivo acessivel so' a SYSTEM e aos Administradores.
+
+    Corta a heranca da pasta e concede controle total aos dois. Usa os SIDs
+    (`*S-1-5-18`) e nao os nomes, que mudam com o idioma do Windows. Devolve
+    True se, no fim, a DACL so' menciona esses dois.
+    """
+    import subprocess
+    if not caminho.is_file():
+        return False
+    argumentos = ["icacls", str(caminho), "/inheritance:r", "/grant:r",
+                  f"*{SID_SYSTEM}:F", f"*{SID_ADMINISTRADORES}:F"]
+    try:
+        subprocess.run(argumentos, capture_output=True, check=False,
+                       creationflags=0x08000000)  # CREATE_NO_WINDOW
+        # Sobra de ACE explicita dada a grupos largos (raro, mas barato tirar).
+        subprocess.run(["icacls", str(caminho), "/remove:g",
+                        *[f"*{s}" for s in SIDS_LARGOS]],
+                       capture_output=True, check=False, creationflags=0x08000000)
+        return sids_com_acesso(caminho) <= SIDS_PERMITIDOS
+    except Exception:
+        return False
+
+
+def config_protegido(caminho: pathlib.Path | None = None) -> bool:
+    """A DACL do config.json so' menciona SYSTEM e Administradores?"""
+    caminho = caminho or caminho_config()
+    try:
+        return sids_com_acesso(caminho) <= SIDS_PERMITIDOS
+    except Exception:
+        return False
+
+
+def _ao_lado_do_executavel(destino: pathlib.Path) -> bool:
+    return (getattr(sys, "frozen", False)
+            and destino.parent.resolve() == pasta_do_executavel().resolve())
+
+
+def proteger_config_existente() -> str:
+    """Chamado ao abrir: fecha a permissao de um config.json antigo.
+
+    So' no .exe e so' no arquivo AO LADO dele (o de %APPDATA% ja' e' do usuario).
+    Devolve uma linha para o log, ou "" se nao havia o que fazer.
+    """
+    destino = pasta_do_executavel() / "config.json"
+    if not _ao_lado_do_executavel(destino) or not destino.is_file():
+        return ""
+    if config_protegido(destino):
+        return ""
+    if proteger_arquivo(destino):
+        return ("config.json tinha permissao larga (a chave compartilhada estava "
+                "legivel por outros usuarios): agora so' SYSTEM e Administradores")
+    return ("ATENCAO: nao consegui restringir a permissao do config.json; a "
+            "chave compartilhada pode estar legivel por outros usuarios")
 
 
 _pasta_de_saida: pathlib.Path | None = None
@@ -161,6 +248,15 @@ def ip_local() -> str:
     return redes.ip_padrao()
 
 
+def _apos_gravar(destino: pathlib.Path) -> None:
+    """Arquivo novo herda a permissao da pasta: fecha-a de novo se preciso."""
+    try:
+        if _ao_lado_do_executavel(destino) and not config_protegido(destino):
+            proteger_arquivo(destino)
+    except Exception:
+        pass  # proteger e' reforco; nunca pode impedir de gravar
+
+
 def carregar() -> dict:
     caminho = caminho_config()
     cfg = padrao()
@@ -179,6 +275,7 @@ def salvar(cfg: dict) -> pathlib.Path:
     gravavel = {k: v for k, v in cfg.items() if k != "capturar"}
     caminho.write_text(json.dumps(gravavel, indent=2, ensure_ascii=False),
                        encoding="utf-8")
+    _apos_gravar(caminho)
     return caminho
 
 
@@ -198,6 +295,7 @@ def gravar_chave(chave: str, valor) -> None:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     caminho.write_text(json.dumps(atual, indent=2, ensure_ascii=False),
                        encoding="utf-8")
+    _apos_gravar(caminho)
 
 
 def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:
@@ -208,13 +306,15 @@ def gravar_ao_lado_do_executavel(cfg: dict) -> pathlib.Path:
     subiria sem layout e sem chave. Como `caminho_config` prefere o arquivo ao
     lado do executavel, a janela e o supervisor leem o mesmo arquivo.
 
-    O arquivo contem a CHAVE COMPARTILHADA e fica legivel por quem tem acesso
-    a pasta do executavel; o %APPDATA% era so' do usuario.
+    O arquivo contem a CHAVE COMPARTILHADA: depois de gravado, a permissao dele
+    e' fechada para SYSTEM e Administradores (proteger_arquivo); sem isso ele
+    herdaria a da pasta, legivel por qualquer usuario.
     """
     destino = pasta_do_executavel() / "config.json"
     gravavel = {k: v for k, v in cfg.items() if k != "capturar"}
     destino.write_text(json.dumps(gravavel, indent=2, ensure_ascii=False),
                        encoding="utf-8")
+    _apos_gravar(destino)
     return destino
 
 

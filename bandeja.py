@@ -47,6 +47,32 @@ def cor_do_estado(motor) -> tuple:
         return CINZA
 
 
+def _verificar_pelo_menu(motor) -> None:
+    """Consulta o GitHub (thread) e diz o resultado num balao."""
+    def trabalho() -> None:
+        try:
+            motor.aviso(motor.verificar_atualizacao())
+        except Exception:
+            log.debug("falha ao verificar a atualizacao", exc_info=True)
+
+    threading.Thread(target=trabalho, name="verificar-atualizacao", daemon=True).start()
+
+
+def _atualizar_pelo_menu(motor) -> None:
+    def trabalho() -> None:
+        try:
+            motor.atualizar_agora()
+        except Exception as exc:
+            motor.aviso(f"Nao atualizei: {exc}")
+
+    threading.Thread(target=trabalho, name="instalar-atualizacao", daemon=True).start()
+
+
+def _versao_disponivel(motor) -> str:
+    release = getattr(getattr(motor, "atualizador", None), "disponivel", None)
+    return release.versao if release is not None else ""
+
+
 def _aviso_de_conexao(antes, depois) -> str:
     """Texto do balao quando a conexao muda; "" quando nao ha' o que dizer.
 
@@ -176,6 +202,12 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
             lambda _i: motor.atualizar_conexoes()))
         itens.append(pystray.MenuItem("Ouvir o audio de", pystray.Menu(
             lambda: _itens_de_audio(pystray, motor))))
+        itens.append(pystray.MenuItem(
+            "Verificar atualizacao", lambda _i: _verificar_pelo_menu(motor)))
+        itens.append(pystray.MenuItem(
+            lambda _i: f"Atualizar agora para a v{_versao_disponivel(motor)}",
+            lambda _i: _atualizar_pelo_menu(motor),
+            visible=lambda _i: bool(_versao_disponivel(motor))))
     if acoes and ao_sair is not None:
         itens.append(pystray.Menu.SEPARATOR)
         itens.append(pystray.MenuItem(rotulo_sair, lambda: ao_sair()))

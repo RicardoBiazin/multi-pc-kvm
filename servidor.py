@@ -596,6 +596,13 @@ class Servidor:
                 caiu = True
         if caiu:
             log.warning("'%s' %s -- comando de volta ao servidor", nome, motivo)
+            try:
+                import diagnostico
+                diagnostico.registrar_fotografia(
+                    log, f"'{nome}' {motivo}", self.ips_clientes.get(nome, ""),
+                    int(self.cfg.get("porta", 24810)))
+            except Exception:
+                log.debug("nao consegui fotografar a rede", exc_info=True)
             conn.fechar(f"derrubado por nos: {motivo}")
             # Sem isto o som seguia indo para quem ja' foi derrubado: o
             # `finally` de `_receber_cliente` so' limpa quando e' ELE que tira

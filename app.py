@@ -77,7 +77,7 @@ def conferir_o_proprio_pacote() -> str:
 
 
 MODULOS_DO_PROGRAMA = (
-    "alvo", "arquivos", "audio", "aviso", "bandeja", "borda", "cliente", "cursor_virtual", "politica",
+    "alvo", "arquivos", "atualizacao", "audio", "aviso", "bandeja", "borda", "cliente", "cursor_virtual", "politica",
     "clipboard_win", "configuracao", "contador", "descoberta", "diagnostico",
     "entrada_win", "interface", "layout", "motor", "protocolo", "redes",
     "relatorio", "servico", "servidor", "sessao_win", "tema",
@@ -153,10 +153,25 @@ def main() -> int:
     p.add_argument("-v", "--verboso", action="store_true")
     p.add_argument("--conferir-pacote", action="store_true",
                    help=argparse.SUPPRESS)  # o empacotar.py chama; ver la'
+    p.add_argument("--pos-atualizacao", action="store_true",
+                   help=argparse.SUPPRESS)  # o ajudante da atualizacao; ver atualizacao.py
     args = p.parse_args()
 
     if args.conferir_pacote:
         return conferir_pacote()
+
+    if args.pos_atualizacao:
+        # O ajudante: nao abre janela nem motor. Para o antigo, abre o novo e
+        # espera a confirmacao; senao, desfaz a troca do .exe.
+        configurar_log("", args.verboso, "atualizacao")
+        import atualizacao
+        return atualizacao.pos_atualizacao()
+
+    # Versao recem-instalada pela atualizacao: avisa o ajudante que ficou de pe'.
+    import atualizacao
+    atualizacao.limpar_restos()
+    threading.Thread(target=atualizacao.confirmar_se_pendente,
+                     name="confirma-atualizacao", daemon=True).start()
 
     # A config vem antes do log: e' dela que sai o nome do PC no arquivo.
     if args.servico:
@@ -195,6 +210,10 @@ def main() -> int:
         log.error("IDENTIDADE: %s", aviso_de_identidade)
     log.info("configuracao: %s", conf.caminho_config())
     log.info("log e relatorios: %s", conf.pasta_de_saida())
+    aviso_de_permissao = conf.proteger_config_existente()
+    if aviso_de_permissao:
+        (log.warning if aviso_de_permissao.startswith("ATENCAO") else log.info)(
+            "%s", aviso_de_permissao)
     if conf.migrar_inicio_automatico():
         log.info("inicio automatico apontava para a versao anterior "
                  "(2pc_1Kit.exe); passou a apontar para este executavel")

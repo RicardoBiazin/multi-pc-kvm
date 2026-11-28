@@ -324,6 +324,9 @@ class Janela(tk.Tk):
                    command=self._abrir_opcoes).grid(row=0, column=0)
         ttk.Button(mais, text="Atualizar conexoes",
                    command=self._atualizar_conexoes).grid(row=0, column=1, padx=8)
+        self.botao_versao = ttk.Button(mais, text=f"Verificar atualizacao (v{conf.VERSAO})",
+                                       command=self._verificar_atualizacao)
+        self.botao_versao.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Label(mais, text="Ctrl+Alt+M liga/desliga a troca  |  Ctrl+Alt+K "
                              "teclado em todos os PCs  |  Ctrl+Alt+L (2x) bloqueia "
                              "todos  |  Ctrl+Alt+R atualiza as conexoes").grid(
@@ -550,6 +553,126 @@ class Janela(tk.Tk):
                   length=110, command=lambda _v: self._mudou_volume()
                   ).grid(row=0, column=coluna + 1)
 
+    # -- oferta do inicio automatico ---------------------------------------
+
+    def _oferecer_inicio_automatico(self, forcar: bool = False) -> bool:
+        """Pergunta uma vez se quer ligar o inicio automatico, quando nao esta'.
+
+        Sem ele a tela de bloqueio e a de senha ficam sem teclado e mouse -- o
+        sintoma que mais confundiu na esquerda (27/11/2026): a janela estava no
+        ar e "tudo funcionava", ate' bloquear. Devolve True se mostrou a pergunta.
+        """
+        import sys
+        if not forcar:
+            if not getattr(sys, "frozen", False):
+                return False  # rodando do codigo-fonte: nao ha' .exe para registrar
+            if self.cfg.get("nao_perguntar_inicio_automatico"):
+                return False
+            try:
+                if servico.instalado():
+                    return False
+            except Exception:
+                return False
+            if lay.Layout.de_config(self.cfg).validar():
+                return False  # ainda configurando: nada a ligar
+        d = tk.Toplevel(self)
+        self._dialogo_inicio = d
+        d.title(conf.APP)
+        d.resizable(False, False)
+        d.transient(self)
+        corpo = ttk.Frame(d, padding=14)
+        corpo.grid(row=0, column=0)
+        ttk.Label(corpo, justify="left", wraplength=430, text=(
+            "O inicio automatico nao esta' ligado neste PC.\n\n"
+            "Sem ele:\n"
+            "  - o teclado e o mouse NAO passam na tela de bloqueio nem na caixa "
+            "de senha;\n"
+            "  - o programa so' funciona depois que alguem o abre.\n\n"
+            "Ligar agora? (Pede Administrador e leva alguns segundos.)")).grid(
+            row=0, column=0, columnspan=2, sticky="w")
+        nunca = tk.BooleanVar(value=False)
+        ttk.Checkbutton(corpo, text="Nao perguntar de novo", variable=nunca).grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        def ligar() -> None:
+            d.destroy()
+            self.var_windows.set(True)
+            self._alternar_windows()
+
+        def agora_nao() -> None:
+            if nunca.get():
+                self.cfg["nao_perguntar_inicio_automatico"] = True
+                try:
+                    conf.gravar_chave("nao_perguntar_inicio_automatico", True)
+                except OSError:
+                    pass
+            d.destroy()
+
+        botoes = ttk.Frame(corpo)
+        botoes.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(botoes, text="Agora nao", command=agora_nao).grid(row=0, column=0,
+                                                                     padx=4)
+        ttk.Button(botoes, text="Ligar agora", command=ligar).grid(row=0, column=1)
+        d.protocol("WM_DELETE_WINDOW", agora_nao)
+        return True
+
+    # -- atualizacao do programa (atualizacao.py) --------------------------
+
+    def _verificar_atualizacao(self) -> None:
+        """Consulta o GitHub numa thread e, se houver versao nova, oferece instalar."""
+        self.botao_versao.configure(state="disabled", text="Consultando o GitHub...")
+
+        def trabalho() -> None:
+            texto = self.motor.verificar_atualizacao()
+            release = self.motor.atualizador.disponivel
+            self._na_interface(lambda: self._mostrar_versao(texto, release))
+
+        threading.Thread(target=trabalho, name="verificar-atualizacao",
+                         daemon=True).start()
+
+    def _mostrar_versao(self, texto: str, release) -> None:
+        self.botao_versao.configure(state="normal",
+                                    text=f"Verificar atualizacao (v{conf.VERSAO})")
+        if release is None:
+            self._avisar(texto)
+            return
+        import sys
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo(conf.APP, f"{texto}\n\nRodando do codigo-fonte: use "
+                                          f"git pull; so' o .exe se atualiza sozinho.")
+            return
+        if messagebox.askyesno(
+                conf.APP, f"{texto}\n\nInstalar agora? O programa baixa, confere e "
+                          f"reinicia (cerca de um minuto); se a versao nova nao "
+                          f"subir, a anterior volta sozinha."):
+            self._instalar_atualizacao()
+
+    def _instalar_atualizacao(self) -> None:
+        self.botao_versao.configure(state="disabled", text="Baixando a atualizacao...")
+        # Ao terminar, o ajudante ja' foi disparado: esta janela se encerra.
+        self.motor.pedir_saida = lambda: self._na_interface(self._fechar_para_atualizar)
+
+        def trabalho() -> None:
+            try:
+                self.motor.atualizar_agora()
+            except Exception as exc:
+                self._na_interface(lambda: self._falha_da_atualizacao(str(exc)))
+
+        threading.Thread(target=trabalho, name="instalar-atualizacao",
+                         daemon=True).start()
+
+    def _falha_da_atualizacao(self, texto: str) -> None:
+        self.botao_versao.configure(state="normal",
+                                    text=f"Verificar atualizacao (v{conf.VERSAO})")
+        messagebox.showerror(conf.APP, f"Nao atualizei:\n\n{texto}\n\nO programa "
+                                       f"continua na versao {conf.VERSAO}.")
+
+    def _fechar_para_atualizar(self) -> None:
+        if self._icone_bandeja is not None:
+            self._icone_bandeja.stop()
+        self.motor.parar()
+        self.destroy()
+
     def _atualizar_conexoes(self) -> None:
         if not self.motor.ativo():
             self._avisar("o programa nao esta' no ar nesta janela; quem mantem a "
@@ -576,6 +699,10 @@ class Janela(tk.Tk):
         ("validar_dns_reverso", "Validar o IP pelo DNS reverso: o nome do PC "
                                 "precisa bater (seguranca)", True),
     )
+    ROTULOS_DE_ATUALIZACAO = {
+        "avisar": "so' avisar quando houver versao nova (padrao)",
+        "automatica": "instalar sozinho (num momento calmo)",
+        "desligada": "nao consultar o GitHub"}
     ROTULOS_DO_MODIFICADOR = {"nenhum": "nenhuma tecla (troca sempre)",
                               "shift": "Shift apertado", "ctrl": "Ctrl apertado"}
 
@@ -635,6 +762,15 @@ class Janela(tk.Tk):
             row=linha, column=1, sticky="w")
         linha += 1
 
+        ttk.Label(corpo, text="Atualizacoes do programa:").grid(
+            row=linha, column=0, sticky="w", pady=(8, 0))
+        var_atu = tk.StringVar(value=self.ROTULOS_DE_ATUALIZACAO[p.atualizacao])
+        ttk.Combobox(corpo, textvariable=var_atu, width=40,
+                     state="disabled" if not sou_servidor else "readonly",
+                     values=list(self.ROTULOS_DE_ATUALIZACAO.values())).grid(
+            row=linha, column=1, sticky="w", pady=(8, 0))
+        linha += 1
+
         var_cursor = tk.BooleanVar(value=p.desenhar_cursor)
         ttk.Checkbutton(corpo, text="Desenhar o cursor neste PC se ele nao tiver "
                                     "mouse", variable=var_cursor).grid(
@@ -647,6 +783,9 @@ class Janela(tk.Tk):
             novas["modificador"] = next(
                 (k for k, v in self.ROTULOS_DO_MODIFICADOR.items() if v == rotulo),
                 "nenhum")
+            novas["atualizacao"] = next(
+                (k for k, v in self.ROTULOS_DE_ATUALIZACAO.items()
+                 if v == var_atu.get()), "avisar")
             novas["ignorar_tela_cheia"] = bool(var_cheia.get())
             novas["liberados"] = var_lib.get()
             novas["desenhar_cursor"] = bool(var_cursor.get())
@@ -1447,4 +1586,8 @@ class Janela(tk.Tk):
 
 
 def abrir(cfg: dict, farol: descoberta.Farol | None = None) -> None:
-    Janela(cfg, farol).mainloop()
+    janela = Janela(cfg, farol)
+    # Depois de a janela aparecer: a pergunta e' sobre o uso normal, nao sobre a
+    # montagem da tela (e os testes que montam a Janela nao a recebem).
+    janela.after(1500, janela._oferecer_inicio_automatico)
+    janela.mainloop()

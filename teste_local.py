@@ -998,6 +998,575 @@ def teste_icone_de_estado() -> None:
     checar("o aviso do papel chega ao balao da bandeja", avisos == ["teste"])
 
 
+def teste_config_protegido() -> None:
+    """A chave compartilhada mora no config.json: so' SYSTEM e Administradores."""
+    import tempfile
+    import configuracao as conf
+    print("permissao do config.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        arq = pathlib.Path(tmp) / "config.json"
+        arq.write_text('{"chave": "segredo"}', encoding="utf-8")
+        antes = conf.sids_com_acesso(arq)
+        checar("arquivo novo herda da pasta mais do que SYSTEM e Administradores",
+               bool(antes - conf.SIDS_PERMITIDOS), str(sorted(antes)))
+        checar("e portanto nao esta' protegido", not conf.config_protegido(arq))
+        checar("proteger_arquivo devolve True", conf.proteger_arquivo(arq))
+        depois = conf.sids_com_acesso(arq)
+        checar("agora so' SYSTEM e Administradores", depois <= conf.SIDS_PERMITIDOS,
+               str(sorted(depois)))
+        checar("config_protegido confirma", conf.config_protegido(arq))
+        if diagnostico.elevado():
+            # O .exe pede Administrador; um shell comum (token filtrado) nao "e"
+            # Administrador e, de proposito, deixa de ler o arquivo.
+            checar("elevado: o programa ainda le' e regrava o arquivo",
+                   "segredo" in arq.read_text(encoding="utf-8"))
+            arq.write_text('{"chave": "outra"}', encoding="utf-8")
+            checar("regravar o conteudo mantem a permissao", conf.config_protegido(arq))
+        else:
+            try:
+                arq.read_text(encoding="utf-8")
+                lido = True
+            except PermissionError:
+                lido = False
+            checar("sem elevacao: o usuario comum NAO le' a chave", not lido)
+        checar("arquivo que nao existe: False", not conf.proteger_arquivo(
+            pathlib.Path(tmp) / "nao-existe.json"))
+
+        # arquivo novo gravado ao lado do .exe e' fechado na hora
+        real = (conf.pasta_do_executavel, getattr(sys, "frozen", False))
+        conf.pasta_do_executavel = lambda: pathlib.Path(tmp)
+        sys.frozen = True
+        try:
+            novo = pathlib.Path(tmp) / "novo.json"
+            novo.write_text("{}", encoding="utf-8")
+            checar("antes de _apos_gravar, o arquivo novo esta' largo",
+                   not conf.config_protegido(novo))
+            conf._apos_gravar(novo)
+            checar("_apos_gravar fecha o arquivo ao lado do .exe",
+                   conf.config_protegido(novo))
+            fora = pathlib.Path(tmp) / "sub"
+            fora.mkdir()
+            alheio = fora / "x.json"
+            alheio.write_text("{}", encoding="utf-8")
+            conf._apos_gravar(alheio)
+            checar("arquivo fora da pasta do .exe nao e' mexido",
+                   not conf.config_protegido(alheio))
+            # config antigo e largo: o inicio o conserta e conta no log
+            arq.unlink()  # o do inicio do teste, ja' protegido
+            (pathlib.Path(tmp) / "config.json").write_text("{}", encoding="utf-8")
+            aviso = conf.proteger_config_existente()
+            checar("config largo e' consertado ao abrir, com aviso",
+                   aviso and "so' SYSTEM" in aviso and conf.config_protegido(
+                       pathlib.Path(tmp) / "config.json"), aviso)
+            checar("ja' protegido: silencio", conf.proteger_config_existente() == "")
+        finally:
+            conf.pasta_do_executavel = real[0]
+            if real[1]:
+                sys.frozen = real[1]
+            else:
+                del sys.frozen
+        # o Python exige poder apagar: o TemporaryDirectory usa o dono (admin)
+
+
+def teste_atualizacao() -> None:
+    """O programa se atualiza pelos Releases: confere, troca, reinicia e desfaz."""
+    import hashlib
+    import io
+    import json
+    import os
+    import tempfile
+    import atualizacao as atu
+    import motor as motormod
+    import servico
+    print("atualizacao pelos Releases")
+
+    # -- versoes ---------------------------------------------------------------
+    checar("v2.10.0 > v2.9.9 (numero, nao texto)", atu.e_mais_nova("2.10.0", "2.9.9"))
+    checar("mesma versao nao e' mais nova", not atu.e_mais_nova("2.6.1", "2.6.1"))
+    checar("versao mais velha nao e' mais nova", not atu.e_mais_nova("2.5.0", "2.6.1"))
+    checar("lixo nao vira atualizacao", not atu.e_mais_nova("abc", "2.6.1")
+           and atu.versao_em_tupla("2.6") is None and atu.versao_em_tupla("v2.6.x") is None)
+    checar("a tarefa principal e' a do servico.py", atu.TAREFA_PRINCIPAL == servico.NOME)
+
+    # -- o JSON do GitHub --------------------------------------------------------
+    base = atu.PREFIXO_DO_DOWNLOAD + "v9.9.9/MultiPC-KVM.exe"
+    sha = hashlib.sha256(b"conteudo novo").hexdigest()
+    dados = {"tag_name": "v9.9.9", "draft": False, "prerelease": False, "assets": [
+        {"name": "ligar-inicio-automatico.bat", "browser_download_url": base + ".bat"},
+        {"name": "MultiPC-KVM.exe", "browser_download_url": base, "size": 13,
+         "digest": "sha256:" + sha.upper()}]}
+    r = atu.interpretar_release(dados)
+    checar("acha o .exe, a versao e o SHA-256 em minusculas",
+           r and r.versao == "9.9.9" and r.sha256 == sha and r.tamanho == 13, str(r))
+    checar("pre-release nao e' oferecido (foi assim que a v2.4.0 saiu de cena)",
+           atu.interpretar_release({**dados, "prerelease": True}) is None)
+    checar("rascunho nao e' oferecido", atu.interpretar_release({**dados, "draft": True}) is None)
+    fora = json.loads(json.dumps(dados))
+    fora["assets"][1]["browser_download_url"] = "https://exemplo.com/MultiPC-KVM.exe"
+    checar("download fora do repositorio e' recusado", atu.interpretar_release(fora) is None)
+    sem = json.loads(json.dumps(dados))
+    del sem["assets"][1]["digest"]
+    checar("sem digest o Release vale, mas com SHA-256 vazio",
+           atu.interpretar_release(sem).sha256 == "")
+    checar("Release sem o .exe nao serve",
+           atu.interpretar_release({**dados, "assets": []}) is None)
+    checar("tag que nao e' versao nao serve",
+           atu.interpretar_release({**dados, "tag_name": "nightly"}) is None)
+
+    class Resposta(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.close()
+
+    checar("buscar_ultima le' a API", atu.buscar_ultima(
+        lambda url, prazo=0: Resposta(json.dumps(dados).encode())).versao == "9.9.9")
+
+    def sem_rede(url, prazo=0):
+        raise OSError("sem internet")
+
+    try:
+        atu.buscar_ultima(sem_rede)
+        levantou = False
+    except atu.ErroDeAtualizacao as exc:
+        levantou = "GitHub" in str(exc)
+    checar("sem internet vira ErroDeAtualizacao, nao excecao crua", levantou)
+
+    # -- baixar ----------------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        rel = atu.Release("9.9.9", base, 13, sha)
+        destino = pasta / "novo.exe"
+        atu.baixar(rel, destino, lambda url, prazo=0: Resposta(b"conteudo novo"))
+        checar("download com SHA-256 certo e' mantido",
+               destino.read_bytes() == b"conteudo novo"
+               and not (pasta / "novo.exe.baixando").exists())
+        destino.unlink()
+        for nome, corpo, rel_ in (
+                ("SHA-256 errado", b"conteudo ADULTERADO", rel),
+                ("tamanho errado", b"curto", atu.Release("9.9.9", base, 13, "")),):
+            try:
+                atu.baixar(rel_, destino, lambda url, prazo=0, c=corpo: Resposta(c),
+                           permitir_sem_digest=True)
+                ok = False
+            except atu.ErroDeAtualizacao:
+                ok = True
+            checar(f"{nome}: recusado e sem restos no disco",
+                   ok and not destino.exists()
+                   and not (pasta / "novo.exe.baixando").exists())
+        try:
+            atu.baixar(atu.Release("9.9.9", base, 13, ""), destino,
+                       lambda url, prazo=0: Resposta(b"conteudo novo"))
+            ok = False
+        except atu.ErroDeAtualizacao as exc:
+            ok = "SHA-256" in str(exc)
+        checar("sem SHA-256 do GitHub nao se atualiza sozinho", ok and not destino.exists())
+
+    # -- conferir o .exe novo --------------------------------------------------
+    class Proc:
+        def __init__(self, c):
+            self.returncode = c
+
+    visto: dict = {}
+
+    def executar(args, **kw):
+        visto.update(args=args, env=kw.get("env"))
+        return Proc(0)
+
+    checar("conferencia aprova com codigo 0 e sem pedir UAC",
+           atu.conferir_executavel(pathlib.Path("x.exe"), executar)
+           and visto["args"][1] == "--conferir-pacote"
+           and visto["env"]["__COMPAT_LAYER"] == "RunAsInvoker")
+    checar("codigo diferente de 0 reprova",
+           not atu.conferir_executavel(pathlib.Path("x.exe"), lambda *a, **k: Proc(4)))
+
+    def quebra(*a, **k):
+        raise OSError("nao abre")
+
+    checar("exe que nem abre reprova", not atu.conferir_executavel(pathlib.Path("x.exe"), quebra))
+
+    # -- aplicar: a troca por renomeacao -----------------------------------------
+    def cenario(pasta, baixar_ok=True, conferir_ok=True, ajudante_ok=True):
+        exe = pasta / "MultiPC-KVM.exe"
+        exe.write_bytes(b"VELHO")
+        chamadas: list = []
+
+        def baixar_(release, destino):
+            if not baixar_ok:
+                raise atu.ErroDeAtualizacao("sem rede")
+            destino.write_bytes(b"NOVO")
+
+        def ajudante(e, via):
+            chamadas.append((e, via))
+            if not ajudante_ok:
+                raise atu.ErroDeAtualizacao("sem tarefa")
+
+        rel = atu.Release("99.0.0", base, 4, sha)
+        return exe, rel, chamadas, dict(baixar_=baixar_, ajudante=ajudante,
+                                         conferir=lambda c: conferir_ok)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        exe, rel, chamadas, kw = cenario(pasta)
+        atu.aplicar(rel, exe, via_tarefa=True, **kw)
+        checar("o .exe novo ocupa o nome de sempre",
+               exe.read_bytes() == b"NOVO")
+        checar("o antigo fica guardado para o desfazer",
+               (pasta / atu.ARQ_ANTIGO).read_bytes() == b"VELHO")
+        checar("o novo sobrando foi embora", not (pasta / atu.ARQ_NOVO).exists())
+        estado = atu.ler_estado(pasta)
+        checar("o estado diz de onde, para onde e se ha' tarefa",
+               estado["para"] == "99.0.0" and estado["via_tarefa"] is True
+               and estado["exe"] == str(exe), str(estado))
+        checar("o ajudante foi disparado uma vez", chamadas == [(exe, True)], str(chamadas))
+
+    for nome, ajuste, esperado in (
+            ("download falha", dict(baixar_ok=False), "sem rede"),
+            ("conferencia reprova", dict(conferir_ok=False), "conferencia"),
+            ("ajudante nao sobe", dict(ajudante_ok=False), "sem tarefa")):
+        with tempfile.TemporaryDirectory() as tmp:
+            pasta = pathlib.Path(tmp)
+            exe, rel, chamadas, kw = cenario(pasta, **ajuste)
+            try:
+                atu.aplicar(rel, exe, **kw)
+                msg = ""
+            except atu.ErroDeAtualizacao as exc:
+                msg = str(exc)
+            checar(f"{nome}: erro claro e o .exe em uso segue o de antes",
+                   esperado in msg and exe.read_bytes() == b"VELHO"
+                   and not (pasta / atu.ARQ_NOVO).exists(), msg)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        exe, rel, chamadas, kw = cenario(pasta)
+        try:
+            atu.aplicar(atu.Release("2.0.0", base, 4, sha), exe, **kw)
+            msg = ""
+        except atu.ErroDeAtualizacao as exc:
+            msg = str(exc)
+        checar("versao mais velha ou igual nao instala", "nao e' mais nova" in msg
+               and exe.read_bytes() == b"VELHO")
+    try:
+        atu.aplicar(atu.Release("99.0.0", base, 4, sha))
+        ok = False
+    except atu.ErroDeAtualizacao as exc:
+        ok = "codigo-fonte" in str(exc)
+    checar("rodando do codigo-fonte, aplicar recusa", ok)
+
+    # -- o ajudante --------------------------------------------------------------
+    def ajudante_em(pasta, via_tarefa, confirmar_na_volta):
+        exe = pasta / "MultiPC-KVM.exe"
+        exe.write_bytes(b"NOVO")
+        (pasta / atu.ARQ_ANTIGO).write_bytes(b"VELHO")
+        (pasta / atu.ARQ_ESTADO).write_text(json.dumps(
+            {"de": "1.0.0", "para": "9.9.9", "exe": str(exe),
+             "via_tarefa": via_tarefa, "em": 123.0}), encoding="utf-8")
+        comandos: list = []
+        hora = [0.0]
+        passos = [0]
+
+        def dormir(s):
+            hora[0] += s
+            passos[0] += 1
+            if confirmar_na_volta and passos[0] >= 3:
+                (pasta / atu.ARQ_CONFIRMACAO).write_text("9.9.9", encoding="utf-8")
+
+        # os dois antigos (bootloader e filho): o 111 sai sozinho, o 222 teima
+        vivos = {111: iter([True, False]), 222: iter([True] * 99)}
+        visto_em: list = []
+        codigo = atu.pos_atualizacao(
+            pasta, rodar=lambda *c: comandos.append(c) or (0, ""),
+            listar_antigos=lambda e, em: visto_em.append(em) or [111, 222],
+            vivo=lambda pid: next(vivos[pid], False), dormir=dormir,
+            relogio=lambda: hora[0], abrir_janela=lambda e: 4242)
+        assert visto_em == [123.0], visto_em  # a hora da troca vem do estado
+        return codigo, exe, comandos
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        codigo, exe, cmds = ajudante_em(pasta, True, True)
+        planos = [c[1] for c in cmds]
+        checar("confirmou: devolve 0 e apaga o .exe antigo",
+               codigo == 0 and not (pasta / atu.ARQ_ANTIGO).exists()
+               and exe.read_bytes() == b"NOVO")
+        checar("pela tarefa: para a principal, roda a principal, apaga a auxiliar",
+               ("/end" in planos and "/run" in planos and "/delete" in planos)
+               and planos.index("/end") < planos.index("/run"), str(cmds))
+        checar("o resultado fica registrado", atu.resultado_da_ultima(pasta).startswith("ok 1.0.0"))
+        checar("so' mata, por PID, o antigo que NAO saiu sozinho (o 222, nao o 111)",
+               [c for c in cmds if c[0] == "taskkill.exe"] == [("taskkill.exe", "/f", "/t", "/pid", "222")],
+               str([c for c in cmds if c[0] == "taskkill.exe"]))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        codigo, exe, cmds = ajudante_em(pasta, False, True)
+        checar("sem tarefa: nao mexe em tarefas e confirma",
+               codigo == 0 and not any("schtasks.exe" == c[0] for c in cmds), str(cmds))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        real = atu.ESPERA_DA_CONFIRMACAO
+        atu.ESPERA_DA_CONFIRMACAO = 10
+        try:
+            codigo, exe, cmds = ajudante_em(pasta, False, False)
+        finally:
+            atu.ESPERA_DA_CONFIRMACAO = real
+        checar("nao confirmou: devolve 1", codigo == 1)
+        checar("e o .exe antigo VOLTA ao lugar", exe.read_bytes() == b"VELHO")
+        checar("o novo que falhou fica guardado para exame",
+               (pasta / atu.ARQ_FALHOU).read_bytes() == b"NOVO")
+        checar("o novo e' encerrado pelo PID que o ajudante abriu",
+               any(c[0] == "taskkill.exe" and "4242" in c for c in cmds), str(cmds))
+        checar("o resultado diz que FALHOU e que o antigo voltou",
+               "FALHOU" in atu.resultado_da_ultima(pasta)
+               and "devolvido" in atu.resultado_da_ultima(pasta))
+
+    checar("sem estado nao ha' o que fazer", atu.pos_atualizacao(
+        pathlib.Path(tempfile.gettempdir()) / "pasta-que-nao-existe-kvm") == 2)
+
+    # -- quem e' "o antigo": so' pela hora de nascimento --------------------------
+    exe_ = pathlib.Path(r"C:\KVM\MultiPC-KVM.exe")
+    tabela = [(10, 1, "MultiPC-KVM.exe"),    # antigo: bootloader
+              (11, 10, "MultiPC-KVM.exe"),   # antigo: filho
+              (20, 1, "MultiPC-KVM.exe"),    # NOVO: nasceu depois da troca
+              (21, 20, "MultiPC-KVM.exe"),   # NOVO: filho
+              (30, 1, "chrome.exe"),         # outro programa
+              (40, 1, "MultiPC-KVM.exe"),    # mesmo nome, OUTRA pasta
+              (os.getpid(), 1, "MultiPC-KVM.exe")]  # este processo: nunca
+    nascimentos = {10: (100.0, str(exe_)), 11: (100.5, str(exe_)),
+                   20: (205.0, str(exe_)), 21: (205.5, str(exe_)),
+                   30: (100.0, r"C:\x\chrome.exe"),
+                   40: (100.0, r"D:\Outra\MultiPC-KVM.exe"),
+                   os.getpid(): (50.0, str(exe_))}
+    achados = atu.processos_antigos(exe_, 200.0, listar=lambda: tabela,
+                                    info=lambda pid: nascimentos.get(pid))
+    checar("antigos = mesmo .exe que nasceram ANTES da troca (nao os novos, nem "
+           "outro programa, nem outra pasta, nem o proprio ajudante)",
+           sorted(achados) == [10, 11], str(achados))
+    antigo_ = exe_.with_name(atu.ARQ_ANTIGO)
+    checar("o antigo renomeado e' achado pelo caminho NOVO que o Windows informa (.antigo.exe)",
+           atu.processos_antigos(exe_, 200.0, listar=lambda: [(10, 1, "MultiPC-KVM.exe")],
+                                 info=lambda pid: (100.0, str(antigo_))) == [10])
+    checar("sem poder abrir o processo, ignora-o (nao derruba)",
+           atu.processos_antigos(exe_, 200.0, listar=lambda: tabela,
+                                 info=lambda pid: None) == [])
+    checar("o caminho e' comparado sem diferenca de maiuscula",
+           atu.processos_antigos(
+               exe_, 200.0, listar=lambda: [(10, 1, "multipc-kvm.exe")],
+               info=lambda pid: (100.0, str(exe_).upper())) == [10])
+    visto = atu._listar_processos()
+    checar("a lista de processos real traz este processo",
+           any(pid == os.getpid() for pid, _, _ in visto))
+    meu = atu._criacao_e_imagem(os.getpid())
+    checar("a hora de nascimento real e' passada e o caminho e' o do Python",
+           meu and 0 < meu[0] < time.time() and meu[1].lower().endswith("python.exe"),
+           str(meu))
+    checar("_vivo: este processo sim, um PID que nao existe nao",
+           atu._vivo(os.getpid()) and not atu._vivo(999999))
+
+    # -- a versao nova confirma que ficou de pe' ---------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        esperas: list = []
+        checar("sem atualizacao pendente, nada a confirmar",
+               not atu.confirmar_se_pendente(pasta, esperas.append))
+        (pasta / atu.ARQ_ESTADO).write_text(json.dumps(
+            {"para": conf.VERSAO}), encoding="utf-8")
+        checar("versao recem-instalada confirma DEPOIS de esperar",
+               atu.confirmar_se_pendente(pasta, esperas.append)
+               and esperas == [atu.CONFIRMAR_APOS]
+               and (pasta / atu.ARQ_CONFIRMACAO).read_text(encoding="utf-8") == conf.VERSAO)
+        checar("ja' confirmada: nao repete", not atu.confirmar_se_pendente(pasta, esperas.append))
+        (pasta / atu.ARQ_CONFIRMACAO).unlink()
+        (pasta / atu.ARQ_ESTADO).write_text(json.dumps({"para": "0.0.1"}), encoding="utf-8")
+        checar("estado de OUTRA versao nao confirma", not atu.confirmar_se_pendente(
+            pasta, esperas.append))
+
+    # -- restos de download interrompido ----------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        pasta = pathlib.Path(tmp)
+        velho, recente = pasta / atu.ARQ_NOVO, pasta / (atu.ARQ_NOVO + ".baixando")
+        velho.write_bytes(b"x")
+        recente.write_bytes(b"x")
+        os.utime(velho, (time.time() - 3600, time.time() - 3600))
+        atu.limpar_restos(pasta)
+        checar("resto antigo e' apagado", not velho.exists())
+        checar("download recente (outra instancia) e' deixado em paz", recente.exists())
+
+    # -- o ajudante pela tarefa agendada ------------------------------------------
+    comandos: list = []
+    real_rodar = atu._rodar
+    atu._rodar = lambda *c: comandos.append(c) or (0, "")
+    try:
+        atu.lancar_ajudante(pathlib.Path(r"C:\Pasta Com Espaco\MultiPC-KVM.exe"), True)
+    finally:
+        atu._rodar = real_rodar
+    criar = next(c for c in comandos if "/create" in c)
+    checar("a tarefa do ajudante roda como SYSTEM, com o caminho entre aspas",
+           "SYSTEM" in criar and '"C:\\Pasta Com Espaco\\MultiPC-KVM.exe" --pos-atualizacao' in criar,
+           str(criar))
+    checar("e e' disparada na hora", any("/run" in c and atu.TAREFA_AUXILIAR in c for c in comandos))
+    atu._rodar = lambda *c: (1, "negado")
+    try:
+        atu.lancar_ajudante(pathlib.Path("x.exe"), True)
+        ok = False
+    except atu.ErroDeAtualizacao as exc:
+        ok = "negado" in str(exc)
+    finally:
+        atu._rodar = real_rodar
+    checar("falha ao criar a tarefa vira erro claro", ok)
+
+    # -- o servico em segundo plano ----------------------------------------------
+    avisos, aplicadas, saidas = [], [], []
+    rel = atu.Release("99.0.0", base, 4, sha)
+    estado_ = {"modo": "avisar", "ocioso": True, "release": rel}
+
+    def novo_atualizador():
+        return atu.Atualizador(
+            modo=lambda: estado_["modo"], avisar=avisos.append,
+            ocioso=lambda: estado_["ocioso"], ao_atualizar=lambda: saidas.append(1),
+            via_tarefa=lambda: False, buscar=lambda: estado_["release"],
+            aplicar_=lambda r, via_tarefa=False: aplicadas.append((r.versao, via_tarefa)))
+
+    a = novo_atualizador()
+    a._volta()
+    checar("modo avisar: avisa a versao nova e NAO instala",
+           len(avisos) == 1 and "99.0.0" in avisos[0] and aplicadas == [])
+    a._volta()
+    checar("e nao repete o aviso da mesma versao", len(avisos) == 1)
+    checar("a versao fica disponivel para o botao e o menu", a.disponivel.versao == "99.0.0")
+    estado_["modo"] = "automatica"
+    avisos.clear()
+    a = novo_atualizador()
+    a._volta()
+    checar("modo automatico e calmo: instala e pede para sair",
+           aplicadas == [("99.0.0", False)] and saidas == [1], str(aplicadas))
+    aplicadas.clear(); saidas.clear()
+    estado_["ocioso"] = False
+    a = novo_atualizador()
+    a._volta()
+    checar("modo automatico mas alguem esta' comandando: espera", aplicadas == [] and saidas == [])
+    estado_["modo"] = "desligada"
+    avisos.clear()
+    novo_atualizador()._volta()
+    checar("modo desligado: nem consulta", avisos == [] and aplicadas == [])
+    estado_["modo"], estado_["ocioso"], estado_["release"] = "automatica", True, atu.Release(
+        "1.0.0", base, 4, sha)
+    aplicadas.clear()
+    novo_atualizador()._volta()
+    checar("versao mais velha no GitHub nao e' instalada", aplicadas == [])
+
+    def falha_rede():
+        raise atu.ErroDeAtualizacao("sem internet")
+
+    a = atu.Atualizador(lambda: "avisar", avisos.append, lambda: True, lambda: None,
+                        lambda: False, buscar=falha_rede)
+    checar("falha de rede nao derruba e fica registrada",
+           a.verificar() is None and "sem internet" in a.ultimo_erro)
+    try:
+        a.atualizar_agora()
+        ok = False
+    except atu.ErroDeAtualizacao:
+        ok = True
+    checar("atualizar sem versao disponivel levanta", ok)
+
+    # -- no Motor, para a janela e a bandeja --------------------------------------
+    m = motormod.Motor({"este_pc": "A", "pcs": [], "chave": "k"})
+    m.atualizador._buscar = lambda: atu.Release("99.0.0", base, 4, sha)
+    checar("verificar_atualizacao conta a versao nova",
+           "v99.0.0" in m.verificar_atualizacao() and m.atualizador.disponivel)
+    m.atualizador._buscar = lambda: atu.Release(conf.VERSAO, base, 4, sha)
+    checar("e conta quando esta' em dia", "mais recente" in m.verificar_atualizacao())
+    m.atualizador._buscar = falha_rede
+    checar("e repassa o erro de rede", "sem internet" in m.verificar_atualizacao())
+    checar("o modo vem das opcoes quando o motor esta' parado",
+           m._modo_de_atualizacao() == "avisar")
+    m.cfg["opcoes"] = {"atualizacao": "automatica"}
+    checar("e muda com a configuracao", m._modo_de_atualizacao() == "automatica")
+    checar("parado nao e' 'momento calmo' para reiniciar", m._ocioso() is False)
+    argv_real = sys.argv
+    try:
+        sys.argv = ["MultiPC-KVM.exe", "--agente", "--desktop", "Winlogon"]
+        checar("o agente SABE que roda sob a tarefa (sem consultar o Agendador)",
+               motormod.Motor._via_tarefa() is True)
+        sys.argv = ["MultiPC-KVM.exe", "--servico"]
+        checar("o supervisor tambem", motormod.Motor._via_tarefa() is True)
+        sys.argv = ["MultiPC-KVM.exe"]
+        servico_real = servico.instalado
+        servico.instalado = lambda: True
+        checar("a janela pergunta ao Agendador (de uma thread, com COM iniciado)",
+               motormod.Motor._via_tarefa() is True)
+        servico.instalado = lambda: False
+        checar("e a resposta 'nao instalada' vale", motormod.Motor._via_tarefa() is False)
+        servico.instalado = servico_real
+    finally:
+        sys.argv = argv_real
+    checar("a politica aceita so' os tres modos",
+           pol.Politica.de_dict({"atualizacao": "automatica"}).atualizacao == "automatica"
+           and pol.Politica.de_dict({"atualizacao": "sempre"}).atualizacao == "avisar"
+           and "atualizacao" in pol.Politica().para_clientes())
+
+
+def teste_fotografia_da_queda() -> None:
+    """Na queda, o estado da rede vai para o log sem ninguem colar script."""
+    print("fotografia da rede na queda")
+    registradas: list = []
+    real = diagnostico.registrar_fotografia
+    diagnostico.registrar_fotografia = (
+        lambda log, motivo, ip="", porta=24810, **k: registradas.append((motivo, ip, porta)) or True)
+    try:
+        c = cliente.Cliente.__new__(cliente.Cliente)
+        c.layout = lay.Layout([lay.PC("SRV", "10.0.0.9", 2, 1, True), lay.PC("esq", "2", 1, 1)])
+        c.cfg = {"porta": 24811}
+        c._fotografar_a_rede("servidor sem sinal ha' 11 s")
+        checar("o cliente fotografa com o IP do servidor e a porta do config",
+               registradas == [("servidor sem sinal ha' 11 s", "10.0.0.9", 24811)],
+               str(registradas))
+        registradas.clear()
+        c.layout = None  # layout quebrado: a fotografia nunca derruba a queda
+        c._fotografar_a_rede("x")
+        checar("falha ao fotografar nao levanta", registradas == [])
+    finally:
+        diagnostico.registrar_fotografia = real
+
+    # a fotografia em si, com um PowerShell de mentira
+    linhas: list = []
+
+    class Log:
+        def warning(self, formato, *args):
+            linhas.append(formato % args)
+
+    diagnostico._ultima_fotografia = 0.0
+    feitas: list = []
+    ok = diagnostico.registrar_fotografia(
+        Log(), "teste", "", 24810, agora=1000.0,
+        executar=lambda script: feitas.append(script) or "--- placas\nEthernet | Up")
+    for _ in range(50):
+        if linhas:
+            break
+        time.sleep(0.05)
+    checar("grava a fotografia no log com o motivo",
+           ok and linhas and "FOTOGRAFIA DA REDE (teste)" in linhas[0]
+           and "Ethernet | Up" in linhas[0], str(linhas))
+    checar("o script leva a porta do KVM", feitas and "24810" in feitas[0]
+           and "__PORTA__" not in feitas[0])
+    checar("uma segunda queda logo em seguida e' pulada",
+           not diagnostico.registrar_fotografia(Log(), "outra", "", 24810,
+                                                agora=1010.0, executar=lambda s: ""))
+    checar("depois do intervalo, tira de novo",
+           diagnostico.registrar_fotografia(Log(), "outra", "", 24810, agora=1100.0,
+                                            executar=lambda s: "x"))
+    time.sleep(0.2)
+
+    def explode(script):
+        raise RuntimeError("sem powershell")
+
+    r = diagnostico.fotografia_da_rede("", 24810, executar=explode)
+    checar("sem PowerShell vira uma linha, nao uma excecao",
+           r and "nao consegui ler o estado do Windows" in r[-1], str(r))
+
+
 def teste_agente_reaproveita_a_extracao() -> None:
     """O agente nasce a cada bloqueio de tela, e extrair ~30 MB toda vez somava
     ~5 s ao tempo ate' o mouse voltar a passar na tela de senha (27/11/2026)."""
@@ -1122,6 +1691,8 @@ def teste_conexao_muda() -> None:
         return c
 
     limite = cliente.SEM_SINAL_DO_SERVIDOR
+    foto_real = diagnostico.registrar_fotografia
+    diagnostico.registrar_fotografia = lambda *a, **k: False  # sem PowerShell de verdade
     cliente.SEM_SINAL_DO_SERVIDOR = 0.2
     try:
         # sem sinal nenhum -> fecha
@@ -1153,6 +1724,7 @@ def teste_conexao_muda() -> None:
         fim.set(); t.join(3)
     finally:
         cliente.SEM_SINAL_DO_SERVIDOR = limite
+        diagnostico.registrar_fotografia = foto_real
 
     # servidor: derrubar o cliente que parou de responder tambem para o som
     class AudioFalso:
@@ -3406,6 +3978,9 @@ def main() -> int:
     teste_audio_roteamento()
     teste_conexao_muda()
     teste_agente_reaproveita_a_extracao()
+    teste_config_protegido()
+    teste_fotografia_da_queda()
+    teste_atualizacao()
     teste_politica_da_troca()
     teste_icone_de_estado()
     teste_switch_externo_do_hyperv()

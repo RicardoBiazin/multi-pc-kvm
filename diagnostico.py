@@ -276,6 +276,95 @@ def liberar(porta_tcp: int, porta_udp: int) -> tuple[bool, str]:
                   f"{alcance}.{aviso}")
 
 
+# -- fotografia da rede no momento de uma queda ------------------------------
+#
+# Em 27/11/2026 a esquerda ficou 5 min sem passar o mouse e a causa nao se
+# achava: a rede estava boa em todo teste feito DEPOIS. O que falta e' o estado
+# no instante da queda -- quais placas estavam de pe', o ping ao outro PC, o
+# estado do TCP do KVM e o que o Windows registrou nos ultimos minutos (o driver
+# do Wi-Fi da esquerda, `mtkwlex`, gritou no mesmo segundo). Tirada em segundo
+# plano e gravada no log, sem ninguem precisar colar um script depois.
+
+SCRIPT_DA_FOTOGRAFIA = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+'--- placas de rede'
+Get-NetAdapter | Sort-Object Status | ForEach-Object {
+  '{0} | {1} | {2} | {3}' -f $_.Name, $_.InterfaceDescription, $_.Status, $_.LinkSpeed }
+'--- rota padrao (menor metrica ganha)'
+Get-NetRoute -DestinationPrefix 0.0.0.0/0 | ForEach-Object {
+  $m = (Get-NetIPInterface -InterfaceIndex $_.ifIndex -AddressFamily IPv4).InterfaceMetric
+  '{0} | metrica {1}' -f $_.InterfaceAlias, ($_.RouteMetric + $m) }
+'--- TCP do KVM (porta __PORTA__)'
+Get-NetTCPConnection | Where-Object { $_.RemotePort -eq __PORTA__ -or $_.LocalPort -eq __PORTA__ } |
+  ForEach-Object { '{0}:{1} -> {2}:{3} {4}' -f $_.LocalAddress, $_.LocalPort,
+                   $_.RemoteAddress, $_.RemotePort, $_.State }
+'--- eventos do sistema nos ultimos 3 minutos'
+Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddMinutes(-3)} -MaxEvents 20 |
+  ForEach-Object { '{0} | {1} | id {2} | {3}' -f $_.TimeCreated.ToString('HH:mm:ss'),
+    $_.ProviderName, $_.Id, (($_.Message -split "`n")[0]) }
+"""
+
+_ultima_fotografia = 0.0
+INTERVALO_ENTRE_FOTOGRAFIAS = 60.0  # s: uma queda costuma vir em sequencia
+
+
+def fotografia_da_rede(ip_do_outro: str = "", porta: int = 24810,
+                       executar=None, prazo: float = 25.0) -> list[str]:
+    """Linhas descrevendo a rede agora. Nunca levanta: o que falhar vira uma linha."""
+    import subprocess
+    sem_janela = 0x08000000  # CREATE_NO_WINDOW
+    linhas: list[str] = []
+    if ip_do_outro:
+        try:
+            r = subprocess.run(["ping", "-n", "2", "-w", "1000", ip_do_outro],
+                               capture_output=True, timeout=10,
+                               creationflags=sem_janela)
+            saida = r.stdout.decode("oem", "replace").strip().splitlines()
+            linhas.append(f"--- ping a {ip_do_outro}")
+            linhas += [x.strip() for x in saida if x.strip()][-4:]
+        except Exception as exc:
+            linhas.append(f"ping a {ip_do_outro} falhou: {exc}")
+    script = SCRIPT_DA_FOTOGRAFIA.replace("__PORTA__", str(int(porta)))
+    try:
+        if executar is None:
+            r = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive",
+                 "-ExecutionPolicy", "Bypass", "-Command", script],
+                capture_output=True, timeout=prazo, creationflags=sem_janela)
+            texto = r.stdout.decode("utf-8", "replace")
+        else:
+            texto = executar(script)
+        linhas += [x.rstrip() for x in texto.splitlines() if x.strip()]
+    except Exception as exc:
+        linhas.append(f"nao consegui ler o estado do Windows: {exc}")
+    return linhas
+
+
+def registrar_fotografia(log, motivo: str, ip_do_outro: str = "",
+                         porta: int = 24810, agora=None, executar=None) -> bool:
+    """Tira a fotografia numa thread e a grava no log. False se foi pulada.
+
+    Uma queda raramente vem sozinha: pula se ja' houve uma ha' menos de
+    INTERVALO_ENTRE_FOTOGRAFIAS, para nao lancar um PowerShell a cada tentativa.
+    """
+    import threading
+    import time
+    global _ultima_fotografia
+    agora = agora if agora is not None else time.monotonic()
+    if agora - _ultima_fotografia < INTERVALO_ENTRE_FOTOGRAFIAS:
+        return False
+    _ultima_fotografia = agora
+
+    def tirar() -> None:
+        linhas = fotografia_da_rede(ip_do_outro, porta, executar)
+        log.warning("FOTOGRAFIA DA REDE (%s):\n    %s", motivo,
+                    "\n    ".join(linhas))
+
+    threading.Thread(target=tirar, name="fotografia-da-rede", daemon=True).start()
+    return True
+
+
 def resumo_das_placas() -> str:
     placas = redes.listar()
     if not placas:

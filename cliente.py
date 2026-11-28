@@ -343,6 +343,17 @@ class Cliente:
             conn.fechar()
         return espera
 
+    def _fotografar_a_rede(self, motivo: str) -> None:
+        """Grava no log o estado da rede AGORA (ver diagnostico.fotografia_da_rede)."""
+        try:
+            import diagnostico
+            servidor = self.layout.servidor()
+            diagnostico.registrar_fotografia(
+                log, motivo, servidor.ip if servidor else "",
+                int(self.cfg.get("porta", 24810)))
+        except Exception:
+            log.debug("nao consegui fotografar a rede", exc_info=True)
+
     def _vigiar_servidor(self, conn: protocolo.Conexao,
                          fim: threading.Event) -> None:
         """Fecha a conexao que ficou muda: o laco de recepcao acorda e reconecta.
@@ -356,6 +367,7 @@ class Cliente:
                 log.warning("o servidor ficou %.0f s sem dar sinal; fechando a "
                             "conexao para reconectar", mudo)
                 self.ultimo_erro = f"servidor sem sinal ha' {mudo:.0f} s"
+                self._fotografar_a_rede(f"servidor sem sinal ha' {mudo:.0f} s")
                 conn.fechar("servidor sem sinal")
                 return
 

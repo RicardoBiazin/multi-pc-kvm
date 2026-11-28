@@ -10,12 +10,14 @@ travam o teclado, e o jeito de descobrir isso e' penoso (ver `_tomar_a_trava`).
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 
 import win32api
 import win32event
 import winerror
 
+import atualizacao
 import cliente
 import configuracao as conf
 import contador
@@ -91,6 +93,52 @@ class Motor:
         # Balao de aviso na bandeja ("Troca pela borda DESLIGADA"): quem tem o
         # icone liga aqui.
         self.aviso = lambda texto: None
+        # Atualizacao pelos Releases do GitHub (atualizacao.py). A consulta periodica
+        # so' liga com o motor no ar e no .exe; verificar e atualizar a' mao
+        # funcionam sempre. pedir_saida fecha o processo depois que o ajudante
+        # foi disparado (a janela se encerra; o agente morre pela tarefa).
+        self.pedir_saida = lambda: None
+        self.atualizador = atualizacao.Atualizador(
+            modo=self._modo_de_atualizacao, avisar=lambda t: self.aviso(t),
+            ocioso=self._ocioso, ao_atualizar=lambda: self.pedir_saida(),
+            via_tarefa=self._via_tarefa)
+
+    # -- atualizacao --------------------------------------------------------
+
+    def _modo_de_atualizacao(self) -> str:
+        politica = getattr(self.papel, "politica", None)
+        if politica is not None:
+            return politica.atualizacao
+        return (self.cfg.get("opcoes") or {}).get("atualizacao", "avisar")
+
+    def _ocioso(self) -> bool:
+        """Momento calmo para reiniciar: ninguem esta' comandando outro PC."""
+        papel = self.papel
+        if papel is None or not self.ativo():
+            return False
+        controle = getattr(papel, "controle", None)
+        if controle is not None:  # servidor
+            return not controle.remoto and not controle.multi and controle.comandante == controle.eu
+        return not getattr(papel, "remoto", False) and not papel.comando.comandando
+
+    @staticmethod
+    def _via_tarefa() -> bool:
+        """O programa roda sob a tarefa do inicio automatico? (decide como o
+        ajudante da atualizacao sobe: ver atualizacao.lancar_ajudante)."""
+        # O supervisor e o agente SAO a tarefa: sem consultar o Agendador, que
+        # por COM nao funciona numa thread sem CoInitialize e diria "nao".
+        if "--agente" in sys.argv or "--servico" in sys.argv:
+            return True
+        try:
+            import pythoncom
+            import servico
+            pythoncom.CoInitialize()
+            try:
+                return servico.instalado()
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            return False
 
     # -- consulta -----------------------------------------------------------
 
@@ -187,6 +235,8 @@ class Motor:
             self.papel = cliente_novo
         self.papel.ao_mudar = self.ao_mudar
         self.papel.avisar = lambda texto: self.aviso(texto)
+        if getattr(sys, "frozen", False):
+            self.atualizador.iniciar()
 
         self.thread = threading.Thread(target=self._rodar, name="motor",
                                        daemon=True)
@@ -201,7 +251,23 @@ class Motor:
         finally:
             self.ao_mudar()
 
+    def verificar_atualizacao(self) -> str:
+        """Consulta o GitHub agora. Devolve o texto para mostrar ao usuario."""
+        release = self.atualizador.verificar()
+        if release is not None:
+            return (f"Nova versao v{release.versao} disponivel (esta e' a v"
+                    f"{conf.VERSAO}).")
+        if self.atualizador.ultimo_erro:
+            return self.atualizador.ultimo_erro
+        return f"Esta e' a versao mais recente (v{conf.VERSAO})."
+
+    def atualizar_agora(self) -> None:
+        """Instala a versao achada por erificar_atualizacao. Levanta
+        atualizacao.ErroDeAtualizacao se nao der; se der, o processo vai fechar."""
+        self.atualizador.atualizar_agora()
+
     def parar(self) -> None:
+        self.atualizador.parar()
         self.parada.set()
         if self.thread is not None:
             self.thread.join(timeout=3)

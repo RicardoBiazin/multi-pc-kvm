@@ -141,6 +141,11 @@ senha e voltar ao sair dele, é isso: o início automático não está no ar naq
 máquina, e quem responde é a janela. O log diz a causa (`o teclado e o mouse não
 passam: a tela em foco é o desktop seguro...`).
 
+**A janela oferece ligar o início automático.** Ao abrir num PC sem ele, a janela
+pergunta uma vez (e "Não perguntar de novo" guarda a resposta no `config.json`),
+explicando que sem ele o teclado e o mouse não passam na tela de senha. "Ligar
+agora" faz o mesmo que marcar *Iniciar com o Windows*; não precisa rodar o `.bat`.
+
 **Quanto demora na tela de bloqueio.** A cada bloqueio e desbloqueio nasce um
 agente novo, no desktop novo, e o mouse só atravessa depois que ele conecta: de
 poucos segundos até ~10 s medidos (27/11/2026), a maior parte desembrulhando o
@@ -291,6 +296,54 @@ O **modo vários PCs** (`Ctrl+Alt+K`) só liga com o cursor e o teclado no próp
 servidor e pelo menos um PC conectado. Enquanto estiver ligado, a borda não troca
 de PC (todos já recebem tudo); desligue com o mesmo atalho, ou use o pânico.
 
+## Atualização automática
+
+Cada PC se atualiza sozinho pelos **Releases do GitHub** (`releases/latest`, que
+ignora pré-lançamentos). Em *Opções da troca de PC*, **Atualizações do programa**:
+
+| Modo | O que faz |
+|---|---|
+| **só avisar** (padrão) | consulta a cada 6 h e mostra um balão; instale pelo botão **Verificar atualização** ou pelo menu do ícone |
+| **instalar sozinho** | instala num momento calmo (ninguém comandando outro PC) |
+| **não consultar** | nunca fala com o GitHub |
+
+Como ela se protege:
+
+1. **SHA-256.** O GitHub informa o hash de cada arquivo do Release; o download só vale
+   se bater (e o tamanho). Sem hash, não atualiza sozinho.
+2. **Conferência do pacote.** O `.exe` novo roda `--conferir-pacote` (importa tudo,
+   inclusive as DLLs) antes de ocupar o lugar do atual.
+3. **Troca por renomeação.** O `.exe` em uso vira `MultiPC-KVM.antigo.exe` e o novo
+   ocupa o nome de sempre — a tarefa do início automático continua apontando certo.
+4. **Ajudante.** Um processo à parte (`--pos-atualizacao`) para o antigo, abre o
+   novo e espera ele **confirmar** que ficou de pé por ~25 s. Se não confirmar em
+   2 minutos, devolve o `.exe` antigo e o abre de volta (o novo fica em
+   `MultiPC-KVM.falhou.exe`, e `atualizacao-resultado.txt` conta o que houve).
+   Com o início automático, o ajudante sobe por uma tarefa agendada própria
+   (`MultiPC-KVM-atualizar`, apagada no fim): a principal mata tudo o que lançou.
+
+A atualização reinicia o KVM por alguns segundos. Só o `.exe` se atualiza; do código
+-fonte, use `git pull`. O primeiro `.exe` com este recurso (v2.7.0) ainda é trocado à mão.
+
+## Segurança do `config.json`
+
+O `config.json` guarda a **chave compartilhada**: quem a lê entra na rede do KVM e
+passa a injetar teclas e cliques. Ao lado do `.exe` ele herdaria a permissão da
+pasta (em `C:\Dev`, e no compartilhamento que aponta para ela, legível por outros
+usuários). Desde a v2.7.0 o programa fecha o arquivo para **SYSTEM e
+Administradores** ao gravá-lo e ao abrir (`config.json tinha permissão larga ...` no
+log). Consequência: para ler ou editar o arquivo, abra o editor **como
+Administrador**; um editor comum não o vê mais.
+
+## Quando a conexão cai: fotografia da rede
+
+Quando o cliente fecha a conexão por falta de sinal do servidor, ou o servidor
+derruba um cliente que parou de responder, o log ganha um bloco **FOTOGRAFIA DA
+REDE** com o estado naquele instante: placas e velocidade, rota padrão, o TCP do
+KVM, ping ao outro PC e o que o Windows registrou nos últimos 3 minutos (o driver
+do Wi-Fi, por exemplo). É para achar a causa de uma queda sem depender de testes
+feitos depois, quando a rede já voltou. No máximo uma por minuto.
+
 ## Ouvir o áudio de outro PC
 
 Na parte de baixo da janela, **Ouvir o áudio de:** tem uma caixa por PC (menos
@@ -417,6 +470,7 @@ Sem elevação o Windows bloqueia captura e injeção sobre janelas elevadas
 | `audio.py` | Áudio entre PCs: captura WASAPI, UDP cifrado (AES-GCM), saída por origem |
 | `politica.py` | Regras da troca de PC (cantos, Shift/Ctrl, tela cheia, ligar/desligar) e atalhos de ação |
 | `cursor_virtual.py` | Setinha desenhada por janela transparente, para PC sem mouse |
+| `atualizacao.py` | Atualização pelos Releases: SHA-256, troca por renomeação, ajudante com desfazer |
 | `redes.py` | Placas via `GetAdaptersAddresses`: IP, Wi-Fi/cabo, máscara, broadcast |
 | `diagnostico.py` | Teste de conexão e regras de Firewall |
 | `relatorio.py` | Relatório de diagnóstico em arquivo, para compartilhar |
