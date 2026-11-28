@@ -721,7 +721,8 @@ class ComandoLocal:
         return self._atalhos.detectar(
             ev["vk"], ev["down"], ew.modificador_pressionado(ew.VK_CONTROL),
             ew.modificador_pressionado(ew.VK_MENU),
-            ew.modificador_pressionado(ew.VK_SHIFT))
+            ew.modificador_pressionado(ew.VK_SHIFT),
+            self.cliente.politica.mapa_de_atalhos())
 
     def _atalho(self, acao: str) -> None:
         """Vem de dentro do hook: nada de rede aqui, so' enfileirar."""

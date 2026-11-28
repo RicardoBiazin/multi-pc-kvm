@@ -21,9 +21,10 @@ janela. Licença MIT.
 | **Ctrl+Alt+L**, duas vezes | bloqueia a sessão de **todos** os PCs |
 | **Ctrl+Alt+R** | atualiza as conexões (fecha e reconecta; no servidor, todos os clientes) |
 
-Os quatro últimos funcionam em qualquer PC que tenha teclado ligado, e podem ser
-desligados em *Opções da troca de PC* (em teclados com AltGr, `Ctrl+Alt+letra`
-pode digitar um caractere).
+Os quatro últimos funcionam em qualquer PC que tenha teclado ligado. Em *Opções da
+troca de PC* dá para **trocar a letra** de cada um (`Ctrl+Alt+<letra>`; uma letra de A a
+Z, sem repetir; vazia = sem atalho) ou desligar todos. Em teclados com AltGr,
+`Ctrl+Alt+letra` pode digitar um caractere: é para isso que a letra é trocável.
 
 ## Tema claro e escuro
 

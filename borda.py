@@ -605,7 +605,8 @@ class Controle:
         return self._atalhos.detectar(
             ev["vk"], ev["down"], ew.modificador_pressionado(ew.VK_CONTROL),
             ew.modificador_pressionado(ew.VK_MENU),
-            ew.modificador_pressionado(ew.VK_SHIFT))
+            ew.modificador_pressionado(ew.VK_SHIFT),
+            self.politica.mapa_de_atalhos())
 
     def _pc_do_atalho(self, ev: dict) -> lay.PC | None:
         """Ctrl+Alt+1..9 leva o cursor direto para o N-esimo PC da lista.

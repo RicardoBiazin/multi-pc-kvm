@@ -31,6 +31,11 @@ FRACAO_DO_CANTO = 0.04
 MODIFICADORES = ("nenhum", "shift", "ctrl")
 
 # Chaves aceitas no config.json (`opcoes`) e o valor de cada uma sem config.
+# Letra de cada acao (Ctrl+Alt+letra). Vazia = a acao fica sem atalho. Em teclado
+# com AltGr, Ctrl+Alt+letra pode digitar um caractere: troque a letra, ou desligue.
+TECLAS_PADRAO = {"alternar_troca": "M", "varias_maquinas": "K",
+                 "reconectar": "R", "bloquear_todos": "L"}
+
 PADRAO = {
     "troca_ligada": True,
     "bloquear_cantos": False,
@@ -48,6 +53,7 @@ PADRAO = {
     # "avisar": so' avisa que ha' versao nova; "automatica": instala sozinha num
     # momento calmo; "desligada": nem consulta o GitHub. Ver atualizacao.py.
     "atualizacao": "avisar",
+    "teclas": dict(TECLAS_PADRAO),
 }
 
 MODOS_DE_ATUALIZACAO = ("avisar", "automatica", "desligada")
@@ -57,18 +63,42 @@ MODOS_DE_ATUALIZACAO = ("avisar", "automatica", "desligada")
 DO_SERVIDOR = ("troca_ligada", "bloquear_cantos", "modificador",
                "ignorar_tela_cheia", "liberados", "dar_a_volta",
                "bloquear_protetor", "compartilhar_clipboard", "atalhos",
-               "avisos_na_bandeja", "atualizacao")
+               "avisos_na_bandeja", "atualizacao", "teclas")
 
 
 def _como(tipo_padrao, valor):
     """Converte um valor vindo do config para o tipo do padrao, sem levantar."""
     if isinstance(tipo_padrao, bool):
         return bool(valor)
+    if isinstance(tipo_padrao, dict):
+        return normalizar_teclas(valor)
     if isinstance(tipo_padrao, list):
         if isinstance(valor, str):
             valor = valor.replace(";", ",").split(",")
         return [str(v).strip().lower() for v in (valor or []) if str(v).strip()]
     return valor
+
+
+def normalizar_teclas(valor) -> dict:
+    """Letra de cada acao: uma letra A-Z, ou vazia (sem atalho).
+
+    Acao ausente ou letra invalida volta ao padrao; letra repetida desliga a acao
+    que vem DEPOIS (na ordem de TECLAS_PADRAO), para nunca haver dois atalhos na
+    mesma tecla.
+    """
+    entrada = valor if isinstance(valor, dict) else {}
+    saida: dict[str, str] = {}
+    usadas: set[str] = set()
+    for acao, padrao in TECLAS_PADRAO.items():
+        letra = str(entrada.get(acao, padrao)).strip().upper()
+        if letra != "" and not (len(letra) == 1 and "A" <= letra <= "Z"):
+            letra = padrao
+        if letra in usadas:
+            letra = ""
+        if letra:
+            usadas.add(letra)
+        saida[acao] = letra
+    return saida
 
 
 # -- atalhos de acao ---------------------------------------------------------
@@ -92,10 +122,11 @@ class Atalhos:
         self._primeiro_l = -1e9
 
     def detectar(self, vk: int, down: bool, ctrl: bool, alt: bool,
-                 shift: bool) -> str | None:
+                 shift: bool, mapa: dict | None = None) -> str | None:
+        """`mapa` e' {vk: acao}; sem ele valem as letras de TECLAS_PADRAO."""
         if not down or not (ctrl and alt) or shift:
             return None
-        acao = ATALHOS.get(vk)
+        acao = (ATALHOS if mapa is None else mapa).get(vk)
         if acao != "bloquear_todos":
             return acao
         agora = self._relogio()
@@ -122,6 +153,7 @@ class Politica:
     validar_dns_reverso: bool = False
     desenhar_cursor: bool = False
     atualizacao: str = "avisar"
+    teclas: dict = field(default_factory=lambda: dict(TECLAS_PADRAO))
 
     @classmethod
     def de_dict(cls, d: dict | None) -> "Politica":
@@ -138,6 +170,13 @@ class Politica:
             self.modificador = "nenhum"
         if self.atualizacao not in MODOS_DE_ATUALIZACAO:
             self.atualizacao = "avisar"
+
+    def mapa_de_atalhos(self) -> dict:
+        """{vk: acao} das letras atuais (acao sem letra nao entra)."""
+        return {ord(letra): acao for acao, letra in self.teclas.items() if letra}
+
+    def letra_de(self, acao: str) -> str:
+        return self.teclas.get(acao, "")
 
     def para_dict(self) -> dict:
         return {chave: getattr(self, chave) for chave in PADRAO}

@@ -611,6 +611,37 @@ def teste_politica_da_troca() -> None:
     t[0] = 9.0
     checar("segunda tarde demais nao conta", a.detectar(L, True, True, True, False) is None)
 
+    # -- letras dos atalhos configuraveis --------------------------------------
+    checar("padrao: M K R L", pol.Politica().teclas == pol.TECLAS_PADRAO)
+    p = pol.Politica.de_dict({"teclas": {"alternar_troca": "j", "reconectar": " u "}})
+    checar("a letra vira maiuscula e perde espacos",
+           p.letra_de("alternar_troca") == "J" and p.letra_de("reconectar") == "U")
+    checar("o que nao foi dito fica no padrao", p.letra_de("varias_maquinas") == "K")
+    checar("letra invalida (numero, duas letras) volta ao padrao",
+           pol.normalizar_teclas({"alternar_troca": "7", "reconectar": "ab"})
+           == pol.TECLAS_PADRAO)
+    checar("vazia desliga so' aquela acao",
+           pol.normalizar_teclas({"varias_maquinas": ""})["varias_maquinas"] == ""
+           and pol.normalizar_teclas({"varias_maquinas": ""})["alternar_troca"] == "M")
+    rep = pol.normalizar_teclas({"alternar_troca": "x", "varias_maquinas": "x"})
+    checar("letra repetida: a primeira fica, a segunda e' desligada",
+           rep["alternar_troca"] == "X" and rep["varias_maquinas"] == "")
+    checar("lixo que nao e' dict vira o padrao", pol.normalizar_teclas("abc") == pol.TECLAS_PADRAO
+           and pol.normalizar_teclas(None) == pol.TECLAS_PADRAO)
+    checar("o mapa troca a letra: J agora e' 'alternar_troca' e M nao e' mais nada",
+           pol.Politica.de_dict({"teclas": {"alternar_troca": "J"}}).mapa_de_atalhos()
+           [ord("J")] == "alternar_troca"
+           and ord("M") not in pol.Politica.de_dict(
+               {"teclas": {"alternar_troca": "J"}}).mapa_de_atalhos())
+    checar("as letras vao aos clientes", "teclas" in pol.Politica().para_clientes())
+    t2 = [0.0]
+    a2 = pol.Atalhos(lambda: t2[0])
+    mapa = pol.Politica.de_dict({"teclas": {"alternar_troca": "J"}}).mapa_de_atalhos()
+    checar("Ctrl+Alt+J dispara com o mapa novo",
+           a2.detectar(ord("J"), True, True, True, False, mapa) == "alternar_troca")
+    checar("e Ctrl+Alt+M deixou de disparar",
+           a2.detectar(ord("M"), True, True, True, False, mapa) is None)
+
     # -- no controle do servidor ----------------------------------------------
     borda.ew.mover_cursor = lambda x, y: None
     modificadores_reais = borda.ew.modificadores_apertados
@@ -714,6 +745,11 @@ def teste_politica_da_troca() -> None:
         acoes.clear()
         checar("com os atalhos desligados, passa para o programa",
                c.tratar(dict(tecla)) is False and acoes == [])
+        c.politica.atualizar({"atalhos": True, "teclas": {"alternar_troca": "J"}})
+        r_m = c.tratar(dict(tecla))              # M: ja' nao e' atalho
+        r_j = c.tratar({**tecla, "vk": 0x4A})    # J: agora e'
+        checar("trocando a letra, o servidor atende a nova e ignora a antiga",
+               r_m is False and r_j is True and acoes == ["alternar_troca"], str(acoes))
         borda.ew.modificador_pressionado = mod_real
 
         # modo varios PCs

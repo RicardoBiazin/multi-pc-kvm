@@ -327,9 +327,8 @@ class Janela(tk.Tk):
         self.botao_versao = ttk.Button(mais, text=f"Verificar atualizacao (v{conf.VERSAO})",
                                        command=self._verificar_atualizacao)
         self.botao_versao.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Label(mais, text="Ctrl+Alt+M liga/desliga a troca  |  Ctrl+Alt+K "
-                             "teclado em todos os PCs  |  Ctrl+Alt+L (2x) bloqueia "
-                             "todos  |  Ctrl+Alt+R atualiza as conexoes").grid(
+        self.var_dica_atalhos = tk.StringVar(value=self._texto_dos_atalhos())
+        ttk.Label(mais, textvariable=self.var_dica_atalhos).grid(
             row=0, column=2, padx=8)
         self.var_ouvir: dict[str, tk.BooleanVar] = {}
         self.var_ouvir_todos = tk.BooleanVar()
@@ -673,6 +672,19 @@ class Janela(tk.Tk):
         self.motor.parar()
         self.destroy()
 
+    def _texto_dos_atalhos(self) -> str:
+        """A linha de dica sob os botoes, com as letras de agora."""
+        import politica as pol
+        p = pol.Politica.de_dict(self.cfg.get("opcoes"))
+        if not p.atalhos:
+            return "Atalhos de acao desligados (Opcoes da troca de PC)"
+        textos = (("alternar_troca", "liga/desliga a troca"),
+                  ("varias_maquinas", "teclado em todos os PCs"),
+                  ("bloquear_todos", "(2x) bloqueia todos"),
+                  ("reconectar", "atualiza as conexoes"))
+        partes = [f"Ctrl+Alt+{p.letra_de(a)} {t}" for a, t in textos if p.letra_de(a)]
+        return "  |  ".join(partes) or "Nenhum atalho de acao definido"
+
     def _atualizar_conexoes(self) -> None:
         if not self.motor.ativo():
             self._avisar("o programa nao esta' no ar nesta janela; quem mantem a "
@@ -692,7 +704,7 @@ class Janela(tk.Tk):
         ("bloquear_protetor", "Bloquear o protetor de tela nos outros PCs", True),
         ("compartilhar_clipboard", "Compartilhar a area de transferencia "
                                    "(texto, imagem e arquivos)", True),
-        ("atalhos", "Atalhos Ctrl+Alt+M / K / R / L", True),
+        ("atalhos", "Atalhos de acao Ctrl+Alt+letra (letras abaixo)", True),
         ("avisos_na_bandeja", "Avisos na bandeja (troca ligada/desligada, modo "
                               "varios PCs)", True),
         ("so_mesma_subrede", "So' aceitar PCs da mesma sub-rede (seguranca)", True),
@@ -771,6 +783,23 @@ class Janela(tk.Tk):
             row=linha, column=1, sticky="w", pady=(8, 0))
         linha += 1
 
+        # Letra de cada atalho (Ctrl+Alt+letra); vazio = sem atalho.
+        quadro_teclas = ttk.LabelFrame(corpo, text=" Letras dos atalhos (Ctrl+Alt+...) ")
+        quadro_teclas.grid(row=linha, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        var_teclas: dict[str, tk.StringVar] = {}
+        nomes = (("alternar_troca", "liga/desliga a troca"),
+                 ("varias_maquinas", "teclado em todos"),
+                 ("bloquear_todos", "bloquear todos (2x)"),
+                 ("reconectar", "atualizar conexoes"))
+        for i, (acao, texto) in enumerate(nomes):
+            var_teclas[acao] = tk.StringVar(value=p.letra_de(acao))
+            ttk.Label(quadro_teclas, text=texto).grid(row=i // 2, column=(i % 2) * 2,
+                                                      sticky="w", padx=(8, 4), pady=2)
+            ttk.Entry(quadro_teclas, textvariable=var_teclas[acao], width=3,
+                      state=estado).grid(row=i // 2, column=(i % 2) * 2 + 1,
+                                         padx=(0, 12))
+        linha += 1
+
         var_cursor = tk.BooleanVar(value=p.desenhar_cursor)
         ttk.Checkbutton(corpo, text="Desenhar o cursor neste PC se ele nao tiver "
                                     "mouse", variable=var_cursor).grid(
@@ -783,6 +812,17 @@ class Janela(tk.Tk):
             novas["modificador"] = next(
                 (k for k, v in self.ROTULOS_DO_MODIFICADOR.items() if v == rotulo),
                 "nenhum")
+            letras = {a: v.get().strip().upper() for a, v in var_teclas.items()}
+            ruins = [f"'{v}' ({a})" for a, v in letras.items()
+                     if v and not ("A" <= v <= "Z" and len(v) == 1)]
+            usadas = [v for v in letras.values() if v]
+            if ruins or len(usadas) != len(set(usadas)):
+                messagebox.showwarning(
+                    conf.APP, "Cada atalho precisa de UMA letra de A a Z, e duas "
+                              "acoes nao podem usar a mesma"
+                              + (f"\n\nInvalidas: {', '.join(ruins)}" if ruins else ""))
+                return
+            novas["teclas"] = letras
             novas["atualizacao"] = next(
                 (k for k, v in self.ROTULOS_DE_ATUALIZACAO.items()
                  if v == var_atu.get()), "avisar")
@@ -797,6 +837,7 @@ class Janela(tk.Tk):
             self.cfg["opcoes"] = final
             conf.gravar_chave("opcoes", final)
             self.motor.opcoes(final)
+            self.var_dica_atalhos.set(self._texto_dos_atalhos())
             self._avisar("opcoes da troca de PC salvas")
             d.destroy()
 

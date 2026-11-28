@@ -94,6 +94,17 @@ def _avisos_ligados(motor) -> bool:
     return True if politica is None else bool(politica.avisos_na_bandeja)
 
 
+def _com_atalho(texto: str, motor, acao: str) -> str:
+    """"Troca pela borda (Ctrl+Alt+M)" com a letra de agora; sem letra, sem sufixo."""
+    papel = getattr(motor, "papel", None)
+    politica = getattr(papel, "politica", None)
+    if politica is None:
+        import politica as pol
+        politica = pol.Politica.de_dict((getattr(motor, "cfg", None) or {}).get("opcoes"))
+    letra = politica.letra_de(acao) if politica.atalhos else ""
+    return f"{texto} (Ctrl+Alt+{letra})" if letra else texto
+
+
 def _troca_ligada(motor) -> bool:
     papel = getattr(motor, "papel", None)
     if papel is not None and getattr(papel, "politica", None) is not None:
@@ -195,10 +206,11 @@ def criar(ao_abrir, ao_sair, motor, acoes: bool = True, titulo: str = "",
     itens.append(estado)
     if acoes:
         itens.append(pystray.MenuItem(
-            "Troca pela borda (Ctrl+Alt+M)", lambda _i: _alternar_troca(motor),
+            lambda _i: _com_atalho("Troca pela borda", motor, "alternar_troca"),
+            lambda _i: _alternar_troca(motor),
             checked=lambda _i: _troca_ligada(motor)))
         itens.append(pystray.MenuItem(
-            "Atualizar conexoes (Ctrl+Alt+R)",
+            lambda _i: _com_atalho("Atualizar conexoes", motor, "reconectar"),
             lambda _i: motor.atualizar_conexoes()))
         itens.append(pystray.MenuItem("Ouvir o audio de", pystray.Menu(
             lambda: _itens_de_audio(pystray, motor))))
