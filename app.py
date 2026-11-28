@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import pathlib
 import sys
 import threading
@@ -286,5 +287,39 @@ def main() -> int:
     return 0
 
 
+def executar() -> int:
+    """`main()` com rede de seguranca para os processos SEM ninguem olhando.
+
+    O .exe e' `--windowed`: uma excecao que escapa vira uma caixa "Unhandled
+    exception in script", modal. No agente do inicio automatico (SYSTEM, num
+    desktop que ninguem ve') ela fica la' para sempre: o processo nao morre, o
+    supervisor nunca percebe a falha e o recuo dele nunca roda (v2.7.0, a esquerda
+    ficou sem teclado e mouse na tela de senha). Aqui a falha vai para um arquivo
+    e o processo SAI com codigo 1, que o supervisor enxerga.
+    """
+    try:
+        return main()
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        parte = next((a.lstrip("-") for a in sys.argv
+                      if a in ("--agente", "--servico", "--pos-atualizacao")), "")
+        if not parte:
+            raise  # a janela: o usuario esta' olhando, a caixa de erro serve
+        texto = traceback.format_exc()
+        try:
+            logging.getLogger("app").critical("o processo '%s' morreu:\n%s",
+                                              parte, texto)
+        except Exception:
+            pass
+        try:
+            destino = conf.pasta_de_saida() / f"erro-fatal-{parte}.txt"
+            destino.write_text(texto, encoding="utf-8")
+        except Exception:
+            pass
+        os._exit(1)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(executar())

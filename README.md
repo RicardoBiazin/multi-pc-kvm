@@ -146,13 +146,7 @@ pergunta uma vez (e "Não perguntar de novo" guarda a resposta no `config.json`)
 explicando que sem ele o teclado e o mouse não passam na tela de senha. "Ligar
 agora" faz o mesmo que marcar *Iniciar com o Windows*; não precisa rodar o `.bat`.
 
-**Quanto demora na tela de bloqueio.** A cada bloqueio e desbloqueio nasce um
-agente novo, no desktop novo, e o mouse só atravessa depois que ele conecta: de
-poucos segundos até ~10 s medidos (27/11/2026), a maior parte desembrulhando o
-`.exe`, que é `--onefile`. Desde a v2.6.1 o agente **reaproveita a extração do
-supervisor** (variáveis `_PYI_*` repassadas no ambiente), e o diagnóstico de
-partida roda ao lado, fora do caminho. Se o agente não subir assim, o supervisor
-volta sozinho ao modo antigo e registra o aviso no `-servico.log`.
+**Quanto demora na tela de bloqueio.** A cada bloqueio e desbloqueio nasce um agente novo, no desktop novo, e o mouse so' atravessa depois que ele conecta: de poucos segundos ate' ~10 s medidos (27/11/2026), a maior parte desembrulhando o `.exe`, que e' `--onefile`. O diagnostico de partida roda ao lado, fora do caminho. Tentou-se fazer o agente reaproveitar a pasta extraida pelo supervisor (v2.6.1), mas na v2.7.0 ele morreu no primeiro import com o agente de verdade; ficou **desligado** (`servico.REAPROVEITAR_EXTRACAO`) ate' alguem prova-lo assim. Se o agente morrer, `erro-fatal-agente.txt` (ao lado do `.exe`) traz o traceback, e o processo sai com codigo 1 em vez de ficar pendurado numa caixa de erro que ninguem ve'.
 
 ### O supervisor e o agente
 

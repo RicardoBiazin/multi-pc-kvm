@@ -1649,6 +1649,7 @@ def teste_agente_reaproveita_a_extracao() -> None:
             parar.set()
         return Proc(next(codigos))
 
+    servico.REAPROVEITAR_EXTRACAO = True  # o recuo so' existe com a otimizacao ligada
     sessao_win.lancar_na_sessao = lancar
     sessao_win.esperar = lambda p, s: p.codigo
     sessao_win.sessao_do_console = lambda: 1
@@ -1661,11 +1662,63 @@ def teste_agente_reaproveita_a_extracao() -> None:
     except Exception as exc:  # AssignProcessToJobObject com handle de mentira
         pass
     finally:
+        servico.REAPROVEITAR_EXTRACAO = False
         (sessao_win.lancar_na_sessao, sessao_win.esperar, sessao_win.sessao_do_console,
          servico.ambiente_de_reuso, servico._prisao, servico.PAUSA_APOS_FALHA,
          servico.VIDA_CURTA) = reais
     checar("1o agente sobe reaproveitando; morreu ao nascer; os seguintes nao",
            lancamentos[:2] == [True, False], str(lancamentos))
+
+
+def teste_processo_sem_janela_nao_trava_no_erro() -> None:
+    """Excecao no agente nao pode virar caixa modal num desktop que ninguem ve'
+    (v2.7.0: o agente ficou pendurado e o supervisor nunca soube)."""
+    import tempfile
+    import app as appmod
+    print("falha no agente: sai com codigo 1, sem caixa de erro")
+    argv_real, main_real, os_real = sys.argv, appmod.main, appmod.os._exit
+    saida_real = conf.pasta_de_saida
+
+    def explode():
+        raise ImportError("partially initialized module 'typing'")
+
+    codigos: list = []
+    with tempfile.TemporaryDirectory() as tmp:
+        conf.pasta_de_saida = lambda: pathlib.Path(tmp)
+        appmod.main = explode
+        try:
+            appmod.os._exit = lambda c: codigos.append(c) or (_ for _ in ()).throw(SystemExit(c))
+            sys.argv = ["MultiPC-KVM.exe", "--agente", "--desktop", "Winlogon"]
+            try:
+                appmod.executar()
+            except SystemExit:
+                pass
+            checar("o agente sai com codigo 1", codigos == [1], str(codigos))
+            erro = pathlib.Path(tmp) / "erro-fatal-agente.txt"
+            checar("e o erro fica num arquivo, com o traceback",
+                   erro.is_file() and "partially initialized" in erro.read_text(encoding="utf-8"))
+            codigos.clear()
+            sys.argv = ["MultiPC-KVM.exe", "--servico"]
+            try:
+                appmod.executar()
+            except SystemExit:
+                pass
+            checar("o supervisor tambem", codigos == [1])
+            codigos.clear()
+            sys.argv = ["MultiPC-KVM.exe"]  # a janela: o usuario esta' olhando
+            try:
+                appmod.executar()
+                levantou = False
+            except ImportError:
+                levantou = True
+            checar("a janela deixa a excecao subir (a caixa de erro serve a ela)",
+                   levantou and codigos == [])
+            appmod.main = lambda: 7
+            sys.argv = ["MultiPC-KVM.exe", "--agente"]
+            checar("sem erro, devolve o codigo do main()", appmod.executar() == 7)
+        finally:
+            sys.argv, appmod.main, appmod.os._exit = argv_real, main_real, os_real
+            conf.pasta_de_saida = saida_real
 
 
 def teste_conexao_muda() -> None:
@@ -3977,6 +4030,7 @@ def main() -> int:
     teste_audio()
     teste_audio_roteamento()
     teste_conexao_muda()
+    teste_processo_sem_janela_nao_trava_no_erro()
     teste_agente_reaproveita_a_extracao()
     teste_config_protegido()
     teste_fotografia_da_queda()

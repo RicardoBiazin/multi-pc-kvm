@@ -279,6 +279,14 @@ def _prisao():
     return job
 
 
+# DESLIGADO desde a v2.7.1. Na v2.7.0 o agente (SYSTEM) nasceu reaproveitando a
+# pasta do supervisor e morreu no primeiro import ("partially initialized module
+# 'typing' from C:\Windows\TEMP\_MEI..."): a sonda do PyInstaller, que so' importava
+# modulos simples, nao pegou. Ate' alguem provar isto com o agente de verdade, o
+# agente extrai a propria pasta, como sempre. A funcao fica para essa prova.
+REAPROVEITAR_EXTRACAO = False
+
+
 def ambiente_de_reuso(ambiente: dict | None = None) -> dict | None:
     """Variaveis que fazem o agente REAPROVEITAR a extracao do supervisor.
 
@@ -310,7 +318,7 @@ def supervisionar(parar: threading.Event) -> None:
     desktop = _ler_desktop()
     # Se um agente que reaproveita a extracao morrer ao nascer, volta-se ao modo
     # de sempre: a tela de bloqueio nao pode depender de uma otimizacao.
-    reaproveitar = ambiente_de_reuso() is not None
+    reaproveitar = REAPROVEITAR_EXTRACAO and ambiente_de_reuso() is not None
     while not parar.is_set():
         sessao = sessao_win.sessao_do_console()
         if sessao is None:  # entre o boot e o Winlogon, ou troca de usuario
