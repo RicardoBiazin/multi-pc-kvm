@@ -267,15 +267,19 @@ def _token_do_system_para(sessao: int):
 
 
 def lancar_na_sessao(sessao: int, desktop: str, executavel: str,
-                     linha_de_comando: str, o_que: str = "agente"):
+                     linha_de_comando: str, o_que: str = "agente",
+                     ambiente_extra: dict | None = None):
     """Sobe o executavel como SYSTEM, na `sessao`, anexado a `desktop`.
 
-    Devolve o handle do processo (para esperar por ele) ou levanta a excecao do
-    Win32. O chamador fecha o handle.
+    `ambiente_extra` soma variaveis de ambiente ao bloco do token (ver
+    `servico.ambiente_de_reuso`). Devolve o handle do processo (para esperar por
+    ele) ou levanta a excecao do Win32. O chamador fecha o handle.
     """
     token = _token_do_system_para(sessao)
     try:
         ambiente = win32profile.CreateEnvironmentBlock(token, False)
+        if ambiente_extra and isinstance(ambiente, dict):
+            ambiente = {**ambiente, **ambiente_extra}
         inicio = win32process.STARTUPINFO()
         inicio.lpDesktop = rf"WinSta0\{desktop}"
         processo, thread, pid, _tid = win32process.CreateProcessAsUser(

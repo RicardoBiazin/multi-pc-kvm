@@ -998,6 +998,107 @@ def teste_icone_de_estado() -> None:
     checar("o aviso do papel chega ao balao da bandeja", avisos == ["teste"])
 
 
+def teste_agente_reaproveita_a_extracao() -> None:
+    """O agente nasce a cada bloqueio de tela, e extrair ~30 MB toda vez somava
+    ~5 s ao tempo ate' o mouse voltar a passar na tela de senha (27/11/2026)."""
+    import servico
+    import sessao_win
+    print("agente reaproveita a extracao do .exe")
+
+    base = {"_PYI_APPLICATION_HOME_DIR": r"C:\Windows\Temp\_MEI123",
+            "_PYI_ARCHIVE_FILE": r"C:\x\MultiPC-KVM.exe",
+            "_PYI_PARENT_PROCESS_LEVEL": "1", "PATH": "x", "TEMP": "y"}
+    r = servico.ambiente_de_reuso(base)
+    checar("leva as _PYI_* do supervisor",
+           r is not None and r["_PYI_APPLICATION_HOME_DIR"] == base["_PYI_APPLICATION_HOME_DIR"]
+           and r["_PYI_PARENT_PROCESS_LEVEL"] == "1")
+    checar("e pede para nao resetar o ambiente",
+           r["PYINSTALLER_RESET_ENVIRONMENT"] == "0")
+    checar("sem levar o resto do ambiente do supervisor",
+           "PATH" not in r and "TEMP" not in r)
+    checar("sem as variaveis do PyInstaller, nao ha' o que reaproveitar",
+           servico.ambiente_de_reuso({"PATH": "x"}) is None)
+    checar("so' a pasta, sem o arquivo: tambem nao",
+           servico.ambiente_de_reuso({"_PYI_APPLICATION_HOME_DIR": "x"}) is None)
+    checar("fora do .exe (rodando do codigo-fonte) nao se aplica",
+           servico.ambiente_de_reuso() is None)
+
+    # o ambiente do token ganha as variaveis extras; o resto fica como esta'
+    visto: dict = {}
+    real = (sessao_win.win32profile.CreateEnvironmentBlock,
+            sessao_win.win32process.CreateProcessAsUser,
+            sessao_win._token_do_system_para)
+
+    class Handle:
+        def Close(self):
+            pass
+
+    sessao_win._token_do_system_para = lambda s: Handle()
+    sessao_win.win32profile.CreateEnvironmentBlock = lambda t, h: {"TEMP": "C:\\Windows\\Temp", "A": "1"}
+
+    def criar(token, exe, linha, a, b, c, flags, ambiente, d, inicio):
+        visto["ambiente"] = ambiente
+        return Handle(), Handle(), 1234, 1
+
+    sessao_win.win32process.CreateProcessAsUser = criar
+    try:
+        sessao_win.lancar_na_sessao(1, "Winlogon", "x.exe", "x.exe --agente",
+                                    ambiente_extra=r)
+        com = visto["ambiente"]
+        sessao_win.lancar_na_sessao(1, "Winlogon", "x.exe", "x.exe --agente")
+        sem = visto["ambiente"]
+    finally:
+        (sessao_win.win32profile.CreateEnvironmentBlock,
+         sessao_win.win32process.CreateProcessAsUser,
+         sessao_win._token_do_system_para) = real
+    checar("o agente recebe o ambiente do token MAIS o de reuso",
+           com["A"] == "1" and com["_PYI_ARCHIVE_FILE"] == base["_PYI_ARCHIVE_FILE"]
+           and com["PYINSTALLER_RESET_ENVIRONMENT"] == "0", str(sorted(com)))
+    checar("sem 'ambiente_extra' nada muda (a janela, o leitor)",
+           sem == {"TEMP": "C:\\Windows\\Temp", "A": "1"}, str(sem))
+
+    # se um agente que reaproveita morre ao nascer, o supervisor desiste disso
+    lancamentos: list = []
+
+    class Proc:
+        def __init__(self, codigo):
+            self.codigo = codigo
+            self.handle = 1
+
+        def Close(self):
+            pass
+
+    codigos = iter([1, 1, 0])
+    reais = (sessao_win.lancar_na_sessao, sessao_win.esperar, sessao_win.sessao_do_console,
+             servico.ambiente_de_reuso, servico._prisao, servico.PAUSA_APOS_FALHA,
+             servico.VIDA_CURTA)
+    parar = threading.Event()
+
+    def lancar(sessao, desktop, exe, linha, o_que="agente", ambiente_extra=None):
+        lancamentos.append(ambiente_extra is not None)
+        if len(lancamentos) == 3:
+            parar.set()
+        return Proc(next(codigos))
+
+    sessao_win.lancar_na_sessao = lancar
+    sessao_win.esperar = lambda p, s: p.codigo
+    sessao_win.sessao_do_console = lambda: 1
+    servico.ambiente_de_reuso = lambda amb=None: {"_PYI_X": "1"}
+    servico._prisao = lambda: type("J", (), {})()
+    servico.PAUSA_APOS_FALHA = 0.0
+    servico.VIDA_CURTA = 60.0
+    try:
+        servico.supervisionar(parar)
+    except Exception as exc:  # AssignProcessToJobObject com handle de mentira
+        pass
+    finally:
+        (sessao_win.lancar_na_sessao, sessao_win.esperar, sessao_win.sessao_do_console,
+         servico.ambiente_de_reuso, servico._prisao, servico.PAUSA_APOS_FALHA,
+         servico.VIDA_CURTA) = reais
+    checar("1o agente sobe reaproveitando; morreu ao nascer; os seguintes nao",
+           lancamentos[:2] == [True, False], str(lancamentos))
+
+
 def teste_conexao_muda() -> None:
     """Regressao: a conexao que morria em silencio deixava o PC 5 minutos sem
     passar o mouse (27/11/2026, 21:35 a 21:41). E o som seguia indo para o
@@ -3304,6 +3405,7 @@ def main() -> int:
     teste_audio()
     teste_audio_roteamento()
     teste_conexao_muda()
+    teste_agente_reaproveita_a_extracao()
     teste_politica_da_troca()
     teste_icone_de_estado()
     teste_switch_externo_do_hyperv()

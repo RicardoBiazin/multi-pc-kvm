@@ -141,6 +141,14 @@ senha e voltar ao sair dele, é isso: o início automático não está no ar naq
 máquina, e quem responde é a janela. O log diz a causa (`o teclado e o mouse não
 passam: a tela em foco é o desktop seguro...`).
 
+**Quanto demora na tela de bloqueio.** A cada bloqueio e desbloqueio nasce um
+agente novo, no desktop novo, e o mouse só atravessa depois que ele conecta: de
+poucos segundos até ~10 s medidos (27/11/2026), a maior parte desembrulhando o
+`.exe`, que é `--onefile`. Desde a v2.6.1 o agente **reaproveita a extração do
+supervisor** (variáveis `_PYI_*` repassadas no ambiente), e o diagnóstico de
+partida roda ao lado, fora do caminho. Se o agente não subir assim, o supervisor
+volta sozinho ao modo antigo e registra o aviso no `-servico.log`.
+
 ### O supervisor e o agente
 
 O supervisor não captura nem injeta nada: ele vive na sessão 0, isolada do

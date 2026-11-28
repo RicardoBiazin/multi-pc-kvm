@@ -111,6 +111,30 @@ def conferir_pacote() -> int:
         return 4
 
 
+def diagnostico_de_partida(cfg: dict, log) -> None:
+    """Linhas de diagnostico do inicio: so' escrevem no log, nada decide por elas."""
+    import descoberta as _desc
+    import diagnostico
+    # O hash da chave e' o jeito de conferir se os dois PCs tem a mesma sem
+    # mostrar a chave: se estes 8 digitos diferem, o handshake vai falhar.
+    log.info("chave (hash): %s", _desc.impressao_da_chave(cfg.get("chave", ""))
+             or "NAO DEFINIDA")
+    log.info("administrador: %s | placas de rede: %s",
+             "sim" if diagnostico.elevado() else "NAO",
+             diagnostico.resumo_das_placas())
+    conflitos = diagnostico.programas_conflitantes()
+    if conflitos:
+        log.error("CONFLITO: %s esta' rodando e faz a mesma coisa que este "
+                  "programa. Os dois disputam os hooks de mouse e teclado e "
+                  "nenhum funciona direito -- feche um dos dois.",
+                  ", ".join(conflitos))
+    publicas = diagnostico.redes_publicas()
+    if publicas:
+        log.warning("rede '%s' marcada como Publica: o Windows bloqueia a busca "
+                    "na rede e as conexoes de entrada nesse modo",
+                    ", ".join(sorted(set(publicas))))
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--sem-janela", action="store_true",
@@ -186,26 +210,16 @@ def main() -> int:
         log.info("apaguei a entrada antiga de inicio automatico no registro: "
                  "quem sobe o programa agora e' a tarefa agendada")
 
-    import descoberta as _desc
-    import diagnostico
-    # O hash da chave e' o jeito de conferir se os dois PCs tem a mesma sem
-    # mostrar a chave: se estes 8 digitos diferem, o handshake vai falhar.
-    log.info("chave (hash): %s", _desc.impressao_da_chave(cfg.get("chave", ""))
-             or "NAO DEFINIDA")
-    log.info("administrador: %s | placas de rede: %s",
-             "sim" if diagnostico.elevado() else "NAO",
-             diagnostico.resumo_das_placas())
-    conflitos = diagnostico.programas_conflitantes()
-    if conflitos:
-        log.error("CONFLITO: %s esta' rodando e faz a mesma coisa que este "
-                  "programa. Os dois disputam os hooks de mouse e teclado e "
-                  "nenhum funciona direito -- feche um dos dois.",
-                  ", ".join(conflitos))
-    publicas = diagnostico.redes_publicas()
-    if publicas:
-        log.warning("rede '%s' marcada como Publica: o Windows bloqueia a busca "
-                    "na rede e as conexoes de entrada nesse modo",
-                    ", ".join(sorted(set(publicas))))
+    if args.agente:
+        # O agente nasce a cada bloqueio e desbloqueio da tela, e quem esta' na
+        # frente do PC espera ele conectar para poder digitar a senha (medido
+        # em 27/11/2026: ~10 s). O diagnostico so' escreve no log -- consulta
+        # rede publica e processos, que levou ate' 4 s -- e nao pode ficar no
+        # caminho: roda ao lado, e o agente conecta enquanto ele termina.
+        threading.Thread(target=diagnostico_de_partida, args=(cfg, log),
+                         name="diagnostico", daemon=True).start()
+    else:
+        diagnostico_de_partida(cfg, log)
 
     if args.relatorio:
         import relatorio

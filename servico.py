@@ -279,10 +279,38 @@ def _prisao():
     return job
 
 
+def ambiente_de_reuso(ambiente: dict | None = None) -> dict | None:
+    """Variaveis que fazem o agente REAPROVEITAR a extracao do supervisor.
+
+    O .exe e' `--onefile`: cada processo seu comeca desembrulhando ~30 MB numa
+    pasta temporaria (`_MEIxxxx`), e o agente nasce a cada bloqueio e
+    desbloqueio da tela -- em 27/11/2026 foram ~5 s so' disso no PC da esquerda
+    (antivirus incluso), de ~10 s entre bloquear e o mouse voltar a passar. Um
+    processo filho que herda as `_PYI_*` do pai e `PYINSTALLER_RESET_ENVIRONMENT=0`
+    usa a pasta que o pai ja' extraiu: medido, 0,06 s em vez de extrair de novo.
+    O ambiente do token (CreateEnvironmentBlock) nao as traz, entao o supervisor
+    as repassa.
+
+    None fora do .exe, ou se o supervisor nao tiver as variaveis.
+    """
+    if ambiente is None:
+        if not getattr(sys, "frozen", False):
+            return None
+        ambiente = os.environ
+    reuso = {k: v for k, v in ambiente.items() if k.startswith("_PYI_")}
+    if "_PYI_APPLICATION_HOME_DIR" not in reuso or "_PYI_ARCHIVE_FILE" not in reuso:
+        return None
+    reuso["PYINSTALLER_RESET_ENVIRONMENT"] = "0"
+    return reuso
+
+
 def supervisionar(parar: threading.Event) -> None:
     """Mantem um agente vivo na sessao do console, no desktop de entrada."""
     job = _prisao()
     desktop = _ler_desktop()
+    # Se um agente que reaproveita a extracao morrer ao nascer, volta-se ao modo
+    # de sempre: a tela de bloqueio nao pode depender de uma otimizacao.
+    reaproveitar = ambiente_de_reuso() is not None
     while not parar.is_set():
         sessao = sessao_win.sessao_do_console()
         if sessao is None:  # entre o boot e o Winlogon, ou troca de usuario
@@ -290,8 +318,9 @@ def supervisionar(parar: threading.Event) -> None:
             continue
         executavel, comando = linha_do_agente(desktop)
         try:
-            processo = sessao_win.lancar_na_sessao(sessao, desktop, executavel,
-                                                   comando)
+            processo = sessao_win.lancar_na_sessao(
+                sessao, desktop, executavel, comando,
+                ambiente_extra=ambiente_de_reuso() if reaproveitar else None)
         except Exception:
             log.error("nao consegui lancar o agente na sessao %d, desktop %s",
                       sessao, desktop, exc_info=True)
@@ -330,6 +359,11 @@ def supervisionar(parar: threading.Event) -> None:
         log.info("o agente saiu com codigo %s", codigo)
         desktop = _ler_desktop()
         if time.monotonic() - nasceu < VIDA_CURTA:
+            if reaproveitar:
+                reaproveitar = False
+                log.warning("o agente morreu ao nascer reaproveitando a "
+                            "extracao do supervisor; daqui em diante cada "
+                            "agente extrai a propria (mais lento, mais seguro)")
             parar.wait(PAUSA_APOS_FALHA)
 
 
